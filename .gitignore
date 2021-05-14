@@ -1,2 +1,5 @@
 scripts/donders_data/*
 scripts/simulated_data/*
+data/*
+results/*
+tmp/*
