@@ -20,6 +20,7 @@ class WavenetSimple(Module):
     def __init__(self, args):
         super(WavenetSimple, self).__init__()
         self.args = args
+        self.timesteps = args.timesteps
         self.build_model(args)
 
         self.criterion = MSELoss().cuda()
@@ -31,7 +32,6 @@ class WavenetSimple(Module):
         '''
         Specify the layers of the model.
         '''
-        self.timesteps = args.timesteps
         self.ch = args.ch_mult * args.num_channels
         modules = []
 
@@ -131,13 +131,13 @@ class WavenetSimple(Module):
 
         return -torch.mean(x)
 
-    def plot_welch(self, x, ax):
+    def plot_welch(self, x, ax, args):
         '''
         Compute and plot (on ax) welch spectra of x.
         '''
-        f, Pxx_den = welch(x, self.args.sr_data, nperseg=4*self.args.sr_data)
+        f, Pxx_den = welch(x, args.sr_data, nperseg=4*args.sr_data)
         ax.plot(f, Pxx_den)
-        for freq in self.args.freqs:
+        for freq in args.freqs:
             ax.axvline(x=freq, color='red')
 
     def analyse_kernels(self):
@@ -187,7 +187,7 @@ class WavenetSimple(Module):
                 savemat(os.path.join(folder, name), {'X': inputs})
 
                 # compute fft of learned input
-                self.plot_welch(inputs, axs[num_filter])
+                self.plot_welch(inputs, axs[num_filter], self.args)
 
             name = '_indiv' if indiv else ''
             filename = os.path.join(
@@ -215,7 +215,7 @@ class WavenetSimple(Module):
 
         output = torch.normal(0.0, noise, size=(channels, gen_len)).cuda()
 
-        if input_mode == 'gaussian noise':
+        if input_mode == 'gaussian_noise':
             # input is gaussian noise
             data = torch.normal(0.0, noise, size=(channels, gen_len)).cuda()
         elif input_mode == 'shuffled_data':
@@ -232,6 +232,8 @@ class WavenetSimple(Module):
             data[0, :shift] = sine
             # data[:, :shift] = self.args.dataset.x_val[:, start:start+shift]
             data = torch.Tensor(data).cuda()
+        else:
+            raise ValueError('No valid args.generate_input specified.')
 
         # recursively generate using the previously defined input
         for t in range(shift, data.shape[1]):
@@ -241,10 +243,12 @@ class WavenetSimple(Module):
             # switch between IIR, FIR, and purely recursive modes
             if mode == 'IIR':
                 data[:, t] = data[:, t] + out
-            if mode == 'FIR':
+            elif mode == 'FIR':
                 output[:, t] = out
-            if mode == 'recursive':
+            elif mode == 'recursive':
                 data[:, t] = out
+            else:
+                raise ValueError('No valid args.generate_mode specified.')
 
         if mode == 'FIR':
             data = output
@@ -267,7 +271,7 @@ class WavenetSimple(Module):
             input_data[:, c, :] = np.random.choice(choose_channel, (1, length))
         return torch.Tensor(input_data).cuda()
 
-    def residual(data, data_f):
+    def residual(self, data, data_f):
         return data_f
 
     def kernel_network_FIR(self,
@@ -290,7 +294,7 @@ class WavenetSimple(Module):
         data = self.first_conv(data)
         # loop over whole network
         for i, layer in enumerate(self.cnn_layers):
-            num_plots = self.args.ch_mult**2
+            num_plots = min(self.args.kernel_limit, self.args.ch_mult**2)
             fig, axs = plt.subplots(num_plots+1, figsize=(20, num_plots*3))
 
             input_data = torch.Tensor(data.cpu()).cuda()
@@ -301,15 +305,18 @@ class WavenetSimple(Module):
             # randomize input for kernel
             # input_data = self.randomize_kernel_input(input_data)
 
+            filter_outputs = []
             for k in range(num_plots):
                 x = self.run_kernel(input_data, i, k)
                 x = x.detach().cpu().numpy().reshape(-1)
+                filter_outputs.append(x)
 
                 # compute fft of kernel output
-                self.plot_welch(x, axs[k])
+                self.plot_welch(x, axs[k], self.args)
 
-                path = os.path.join(folder, str(i) + '_' + str(k) + '.mat')
-                savemat(path, {'X': x})
+            filter_outputs = np.array(filter_outputs)
+            path = os.path.join(folder, 'layer' + str(i) + '.mat')
+            savemat(path, {'X': filter_outputs})
 
             filename = os.path.join(folder, 'layer' + str(i) + '.svg')
             fig.savefig(filename, format='svg', dpi=2400)
@@ -614,7 +621,7 @@ class ConvPoolNet(WavenetSimple):
     Simple convolutional model using max pooling instead of dilation.
     '''
     def build_model(self, args):
-        super(ConvPoolNet, self).__init__(args)
+        super(ConvPoolNet, self).build_model(args)
 
         # add the maxpool layers to the model
         modules = [MaxPool1d(kernel_size=2, stride=2) for r in args.dilations]
@@ -626,6 +633,22 @@ class ConvPoolNet(WavenetSimple):
         for conv, pool in zip(self.cnn_layers, self.maxpool_layers):
             x = self.activation(pool(conv(x)))
 
+        return self.last_conv(x), x
+
+
+class Conv1PoolNet(ConvPoolNet):
+    '''
+    Simple convolutional model using max pooling only in first layer.
+    '''
+
+    def forward(self, x):
+        x = self.first_conv(x)
+        x = self.activation(self.maxpool_layers[0](self.cnn_layers[0](x)))
+
+        for conv in self.cnn_layers:
+            x = self.activation(conv(x))
+
+        print(x.shape)
         return self.last_conv(x), x
 
 

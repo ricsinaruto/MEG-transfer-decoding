@@ -93,9 +93,10 @@ class WavenetFullSimple(WavenetSimple):
     Simple version of wavenet with residual and skip connections.
     '''
     def build_model(self, args):
-        super(WavenetFullSimple, self).__init__(args)
+        super(WavenetFullSimple, self).build_model(args)
 
         # add two 1x1 convolutions at the end
+        del self.last_conv
         self.last_conv = [
             Conv1d(self.ch, self.ch, kernel_size=1, groups=args.groups),
             Conv1d(self.ch, args.num_channels, kernel_size=1)]
@@ -128,7 +129,7 @@ class WavenetFullSimple(WavenetSimple):
 
         return x, None
 
-    def residual(data, data_f):
+    def residual(self, data, data_f):
         '''
         This function is needed to make kernel_network_FIR compatible
         with this model. It simply applies the residual connection.

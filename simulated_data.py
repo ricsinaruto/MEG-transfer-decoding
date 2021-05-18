@@ -7,7 +7,6 @@ from scipy.io import savemat
 from mat4py import loadmat
 
 from donders_data import DondersData
-from utils import run_fft
 
 
 class EventSimulation(DondersData):
@@ -48,7 +47,7 @@ class EventSimulation(DondersData):
         self.fill(args)
         self.generate(args)
 
-        run_fft(args, self.data[0, :], 'unfiltered_input_freq.svg')
+        # run_fft(args, self.data[0, :], 'unfiltered_input_freq.svg')
 
         # save the simulated data and the state time course
         savemat(os.path.join(args.result_dir, 'data.mat'), {'X': self.data})
@@ -157,7 +156,7 @@ class EventSimulation(DondersData):
         Load the already created simulate data.
         '''
         # shift is the input length minus the receptive field
-        self.shift = args.sample_rate - args.timesteps - args.rf
+        self.shift = args.sample_rate - args.timesteps - args.rf + 1
         args.num_channels = len(args.num_channels)
 
         # load data and apply nonlinearity if needed
@@ -186,7 +185,8 @@ class EventSimulation(DondersData):
 
         # load the generated state time course
         path = os.path.join(args.result_dir, 'stc')
-        self.stc = np.array(pickle.load(open(path, 'rb')))
+        if os.path.isfile(path):
+            self.stc = np.array(pickle.load(open(path, 'rb')))
 
 
 class EventSimulationQuantized(EventSimulation):

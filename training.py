@@ -4,7 +4,7 @@ import numpy as np
 import sails
 import torch
 
-from scipy.signal import welch
+from scipy import signal
 from scipy.io import savemat
 
 from torch.nn import MSELoss
@@ -143,6 +143,7 @@ class Experiment:
         '''
         # TODO: this is individual filters but we might also be interested in
         # looking at the sum of filters for a specific output channel
+        sr = self.args.sr_data
         filters = params.reshape(-1, params.shape[2])
         num_filt = min(filters.shape[0], 300)
         fig_fir, axs_fir = plt.subplots(num_filt+1, figsize=(20, num_filt*3))
@@ -151,12 +152,12 @@ class Experiment:
         for i in range(num_filt):
             # frequency spectra as FIR filter
             w, h = signal.freqz(b=filters[i], fs=sr, worN=5*sr)
-            axs_fir[k].plot(w, np.abs(h))
+            axs_fir[i].plot(w, np.abs(h))
 
             # frequency spectra as IIR filter
             filter_coeff = np.append(1, filters[i])
             w, h = signal.freqz(b=1, a=filter_coeff, fs=sr, worN=5*sr)
-            axs_fir[k].plot(w, np.abs(h))
+            axs_fir[i].plot(w, np.abs(h))
 
         path = os.path.join(self.args.result_dir, 'AR_FIR.svg')
         fig_fir.savefig(path, format='svg', dpi=1200)
@@ -243,7 +244,7 @@ class Experiment:
             filters.append(params)
 
         # TODO: which axis to concatenate over
-        filters = np.concatenate(*filters, axis=?)
+        filters = np.concatenate(*filters, axis=5)
         return generated, target, filters
 
     def recursive(self):
@@ -291,14 +292,14 @@ class Experiment:
 
         file.close()
 
-    def freq_loss(generated, target):
+    def freq_loss(self, generated, target):
         '''
         Compute loss for each event type in the data.
         generated: generated timeseries for validation data
         target: ground truth validation data
         '''
         for i, freq in enumerate(self.args.freqs):
-            part = self.dataset.stc[shift+ts:self.dataset.x_val.shape[1]]
+            part = self.dataset.stc[self.shift+self.ts:self.dataset.x_val.shape[1]]
             ind = np.where(part == i)
             loss = self.model.ar_loss(generated[ind, :, 0], target[ind, :, 0])
             print('Frequency ', freq, ' loss: ', loss.item())
@@ -319,8 +320,8 @@ class Experiment:
     def analyse_kernels(self):
         self.model.analyse_kernels()
 
-    def print_kernels(self):
-        self.model.print_kernels()
+    def plot_kernels(self):
+        self.model.plot_kernels()
 
     def generate(self):
         self.model.generate()
@@ -343,8 +344,8 @@ def main():
         e.train()
     if Args.func['analyse_kernels']:
         e.analyse_kernels()
-    if Args.func['print_kernels']:
-        e.print_kernels()
+    if Args.func['plot_kernels']:
+        e.plot_kernels()
     if Args.func['generate']:
         e.generate()
     if Args.func['recursive']:
