@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from wavenets_simple import Conv1PoolNet, ConvPoolNet
@@ -11,17 +12,17 @@ class Args:
     gpu = '1'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'train': True,
+            'train': False,
             'generate': False,
             'recursive': False,
             'analyse_kernels': False,
             'kernel_network_FIR': False,
             'kernel_network_IIR': False,
-            'plot_kernels': False}
+            'plot_kernels': True}
 
     def __init__(self):
         # training arguments
-        self.learning_rate = 0.001
+        self.learning_rate = 0.0005
         self.batch_size = 10000
         self.epochs = 5000
         self.split = 0.2
@@ -30,11 +31,11 @@ class Args:
         self.num_plot = 1
         self.plot_ch = 1
         self.save_curves = True
-        self.load_model = False
+        self.load_model = True
         self.result_dir = os.path.join(
             'results',
             'simulated',
-            '8event_snr1_convpool')
+            '8event_snr1_convpool8ch')
         self.model = ConvPoolNet
         self.dataset = EventSimulation
 
@@ -45,7 +46,7 @@ class Args:
         self.p_drop = 0
         self.k_CPC = 1
         self.mu = 255
-        self.ch_mult = 4
+        self.ch_mult = 8
         self.groups = 1
         self.kernel_size = 16
         self.timesteps = 1
@@ -70,10 +71,10 @@ class Args:
             'data', 'simulated', '8event_snr1', 'data.mat')
 
         # analysis arguments
-        self.generate_noise = 0.53
+        self.generate_noise = 1
         self.generate_length = self.sr_data * 1000
         self.generate_mode = 'IIR'
-        self.generate_input = 'gaussian_noise'
+        self.generate_input = 'shuffled_data'
         self.individual = True
         self.anal_lr = 0.05
         self.anal_epochs = 200

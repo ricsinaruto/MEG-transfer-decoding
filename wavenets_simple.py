@@ -127,11 +127,12 @@ class WavenetSimple(Module):
         Compute the output for a specific layer num_l and kernel num_f.
         '''
         x = self.layer_output(x, num_l-1)
+        x = self.activation(x)
         x = self.run_kernel(x, num_l, num_f)
 
         return -torch.mean(x)
 
-    def plot_welch(self, x, ax, args):
+    def plot_welch(self, x, ax, args, i):
         '''
         Compute and plot (on ax) welch spectra of x.
         '''
@@ -148,10 +149,10 @@ class WavenetSimple(Module):
         if not os.path.isdir(folder):
             os.mkdir(folder)
 
-        figsize = (15, 10*self.ch_mult)
         indiv = self.args.individual
         func = self.kernel_output if indiv else self.channel_output
         num_filters = self.args.ch_mult**2 if indiv else self.args.ch_mult
+        figsize = (15, 10*num_filters)
 
         # loop over all layers and kernels in the model
         for num_layer in range(len(self.args.dilations)):
@@ -187,7 +188,7 @@ class WavenetSimple(Module):
                 savemat(os.path.join(folder, name), {'X': inputs})
 
                 # compute fft of learned input
-                self.plot_welch(inputs, axs[num_filter], self.args)
+                self.plot_welch(inputs, axs[num_filter], self.args, num_layer)
 
             name = '_indiv' if indiv else ''
             filename = os.path.join(
@@ -292,35 +293,46 @@ class WavenetSimple(Module):
         data = torch.Tensor(data).cuda().reshape(1, 1, -1)
 
         data = self.first_conv(data)
-        # loop over whole network
-        for i, layer in enumerate(self.cnn_layers):
-            num_plots = min(self.args.kernel_limit, self.args.ch_mult**2)
-            fig, axs = plt.subplots(num_plots+1, figsize=(20, num_plots*3))
 
-            input_data = torch.Tensor(data.cpu()).cuda()
-            data_f = layer(data)
-            data_f = self.activation(data_f)
+        # loop over whole network
+        self.kernel_network_FIR_loop(folder, data)
+
+    def kernel_network_FIR_loop(self, folder, data):
+        '''
+        Implements loop over the network to get kernel output at each layer.
+        '''
+        for i, layer in enumerate(self.cnn_layers):
+            self.kernel_FIR_plot(folder, data, i)
+
+            # compute output of current layer
+            data_f = self.activation(layer(data))
             data = self.residual(data, data_f)
 
-            # randomize input for kernel
-            # input_data = self.randomize_kernel_input(input_data)
+    def kernel_FIR_plot(self, folder, data, i):
+        '''
+        Plot FIR response of kernels in current layer (i) to input data.
+        '''
+        input_data = torch.Tensor(data.cpu()).cuda()
 
-            filter_outputs = []
-            for k in range(num_plots):
-                x = self.run_kernel(input_data, i, k)
-                x = x.detach().cpu().numpy().reshape(-1)
-                filter_outputs.append(x)
+        num_plots = min(self.args.kernel_limit, self.args.ch_mult**2)
+        fig, axs = plt.subplots(num_plots+1, figsize=(20, num_plots*3))
 
-                # compute fft of kernel output
-                self.plot_welch(x, axs[k], self.args)
+        filter_outputs = []
+        for k in range(num_plots):
+            x = self.run_kernel(input_data, i, k)
+            x = x.detach().cpu().numpy().reshape(-1)
+            filter_outputs.append(x)
 
-            filter_outputs = np.array(filter_outputs)
-            path = os.path.join(folder, 'layer' + str(i) + '.mat')
-            savemat(path, {'X': filter_outputs})
+            # compute fft of kernel output
+            self.plot_welch(x, axs[k], self.args, i)
 
-            filename = os.path.join(folder, 'layer' + str(i) + '.svg')
-            fig.savefig(filename, format='svg', dpi=2400)
-            plt.close('all')
+        filter_outputs = np.array(filter_outputs)
+        path = os.path.join(folder, 'layer' + str(i) + '.mat')
+        savemat(path, {'X': filter_outputs})
+
+        filename = os.path.join(folder, 'layer' + str(i) + '.svg')
+        fig.savefig(filename, format='svg', dpi=2400)
+        plt.close('all')
 
     def kernel_network_IIR(self):
         '''
@@ -337,7 +349,6 @@ class WavenetSimple(Module):
         if not os.path.isdir(folder):
             os.mkdir(folder)
 
-        sr = self.args.sr_data
         ks = self.args.kernel_size
 
         all_kernels = []
@@ -365,7 +376,7 @@ class WavenetSimple(Module):
                 filter_coeff = np.array(filter_coeff)
 
                 # filter_coeff = np.append(1, filter_coeff)
-                w, h = signal.freqz(b=filter_coeff, fs=sr, worN=5*sr)
+                w, h = self.scipy_freqz(filter_coeff, i)
                 axs_freq[k].plot(w, np.abs(h))
 
                 for freq in self.args.freqs:
@@ -380,6 +391,13 @@ class WavenetSimple(Module):
             plt.close('all')
 
         # self.multiplied_kernels(all_kernels)
+
+    def scipy_freqz(self, filter_coeff, i):
+        '''
+        Helper function for the signal.freqz function.
+        '''
+        sr = self.args.sr_data
+        return signal.freqz(b=filter_coeff, fs=sr, worN=5*sr)
 
     def multiplied_kernels(self, all_kernels):
         pass
@@ -634,6 +652,59 @@ class ConvPoolNet(WavenetSimple):
             x = self.activation(pool(conv(x)))
 
         return self.last_conv(x), x
+
+    def kernel_network_FIR_loop(self, folder, data):
+        '''
+        Implements loop over the network to get kernel output at each layer.
+        '''
+        layers = zip(self.cnn_layers, self.maxpool_layers)
+        for i, (conv, pool) in enumerate(layers):
+            self.kernel_FIR_plot(folder, data, i)
+
+            # compute output of current layer
+            data_f = self.activation(pool(conv(data)))
+            data = self.residual(data, data_f)
+
+    def layer_output(self, x, num_l):
+        '''
+        Compute the output for a specific layer num_l.
+        '''
+        x = self.first_conv(x)
+        for i in range(num_l + 1):
+            x = self.cnn_layers[i](x)
+            if i < num_l:
+                x = self.maxpool_layers[i](x)
+                x = self.activation(x)
+        return x
+
+    def kernel_output(self, x, num_l, num_f):
+        '''
+        Compute the output for a specific layer num_l and kernel num_f.
+        '''
+        x = self.layer_output(x, num_l-1)
+        x = self.maxpool_layers[num_l-1](x)
+        x = self.activation(x)
+        x = self.run_kernel(x, num_l, num_f)
+
+        return -torch.mean(x)
+
+    def plot_welch(self, x, ax, args, i):
+        '''
+        Compute and plot (on ax) welch spectra of x.
+        The sampling rate in each layer (i) is halved.
+        '''
+        sr = args.sr_data / 2**i
+        f, Pxx_den = welch(x, sr, nperseg=4*sr)
+        ax.plot(f, Pxx_den)
+        for freq in args.freqs:
+            ax.axvline(x=freq, color='red')
+
+    def scipy_freqz(self, filter_coeff, i):
+        '''
+        Helper function for the signal.freqz function. (i: layer index)
+        '''
+        sr = int(self.args.sr_data / 2**i)
+        return signal.freqz(b=filter_coeff, fs=sr, worN=5*sr)
 
 
 class Conv1PoolNet(ConvPoolNet):

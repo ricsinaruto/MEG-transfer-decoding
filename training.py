@@ -222,6 +222,7 @@ class Experiment:
 
                 target[:, t, i] = x_val[:, t+i]
                 # TODO: fix and validate this part
+                # could use numpy einsum
                 generated[:, t, i] = model.parameters * inputs
 
         return generated, target, model.parameters[:, :, 1:]
