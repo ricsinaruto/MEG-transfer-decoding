@@ -87,6 +87,25 @@ class WavenetFull(WavenetSimple):
 
         return x, None
 
+    def kernel_network_FIR_loop(self, folder, x):
+        '''
+        Implements loop over the network to get kernel output at each layer.
+        '''
+        block = zip(
+            self.filter, self.gate, self.conv_res, self.tanh, self.sigmoid)
+
+        for i, (filt_, gate, conv_res, tanh, sigmoid) in enumerate(block):
+            self.kernel_FIR_plot(folder, x, i, filt_, 'filter')
+            self.kernel_FIR_plot(folder, x, i, gate, 'gate')
+
+            xf = filt_(x)
+            xg = gate(x)
+            xo = tanh(xf)*sigmoid(xg)
+            xo = self.dropout(xo)
+
+            xc = conv_res(xo)
+            x = x[:, :, -xc.shape[2]:] + xc
+
 
 class WavenetFullSimple(WavenetSimple):
     '''

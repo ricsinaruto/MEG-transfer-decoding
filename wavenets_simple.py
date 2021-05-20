@@ -103,22 +103,22 @@ class WavenetSimple(Module):
                 x = self.activation(x)
         return x
 
-    def run_kernel(self, x, num_l, num_kernel):
+    def run_kernel(self, x, layer, num_kernel):
         '''
         Compute the output of a specific kernel num_kernel
-        in a specific layer num_l to input x.
+        in a specific layer (layer) to input x.
         '''
         inp_filt = int(num_kernel/self.args.ch_mult)
         out_filt = num_kernel % self.args.ch_mult
 
         # deconstruct convolution to get specific kernel output
         x = F.conv1d(x[:, inp_filt:inp_filt + 1, :],
-                     self.cnn_layers[num_l].weight[
+                     layer.weight[
                         out_filt:out_filt + 1, inp_filt:inp_filt + 1, :],
-                     self.cnn_layers[num_l].bias[out_filt:out_filt + 1],
-                     self.cnn_layers[num_l].stride,
-                     self.cnn_layers[num_l].padding,
-                     self.cnn_layers[num_l].dilation)
+                     layer.bias[out_filt:out_filt + 1],
+                     layer.stride,
+                     layer.padding,
+                     layer.dilation)
 
         return x
 
@@ -128,7 +128,7 @@ class WavenetSimple(Module):
         '''
         x = self.layer_output(x, num_l-1)
         x = self.activation(x)
-        x = self.run_kernel(x, num_l, num_f)
+        x = self.run_kernel(x, self.cnn_layers[num_l], num_f)
 
         return -torch.mean(x)
 
@@ -302,24 +302,22 @@ class WavenetSimple(Module):
         Implements loop over the network to get kernel output at each layer.
         '''
         for i, layer in enumerate(self.cnn_layers):
-            self.kernel_FIR_plot(folder, data, i)
+            self.kernel_FIR_plot(folder, data, i, layer)
 
             # compute output of current layer
             data_f = self.activation(layer(data))
             data = self.residual(data, data_f)
 
-    def kernel_FIR_plot(self, folder, data, i):
+    def kernel_FIR_plot(self, folder, data, i, layer, name='conv'):
         '''
         Plot FIR response of kernels in current layer (i) to input data.
         '''
-        input_data = torch.Tensor(data.cpu()).cuda()
-
         num_plots = min(self.args.kernel_limit, self.args.ch_mult**2)
         fig, axs = plt.subplots(num_plots+1, figsize=(20, num_plots*3))
 
         filter_outputs = []
         for k in range(num_plots):
-            x = self.run_kernel(input_data, i, k)
+            x = self.run_kernel(data, layer, k)
             x = x.detach().cpu().numpy().reshape(-1)
             filter_outputs.append(x)
 
@@ -327,10 +325,10 @@ class WavenetSimple(Module):
             self.plot_welch(x, axs[k], self.args, i)
 
         filter_outputs = np.array(filter_outputs)
-        path = os.path.join(folder, 'layer' + str(i) + '.mat')
+        path = os.path.join(folder, name + str(i) + '.mat')
         savemat(path, {'X': filter_outputs})
 
-        filename = os.path.join(folder, 'layer' + str(i) + '.svg')
+        filename = os.path.join(folder, name + str(i) + '.svg')
         fig.savefig(filename, format='svg', dpi=2400)
         plt.close('all')
 
@@ -684,7 +682,7 @@ class ConvPoolNet(WavenetSimple):
         x = self.layer_output(x, num_l-1)
         x = self.maxpool_layers[num_l-1](x)
         x = self.activation(x)
-        x = self.run_kernel(x, num_l, num_f)
+        x = self.run_kernel(x, self.cnn_layers[num_l], num_f)
 
         return -torch.mean(x)
 

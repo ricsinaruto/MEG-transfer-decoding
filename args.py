@@ -9,21 +9,21 @@ from simulated_data import EventSimulation, EventSimulationQuantized
 
 
 class Args:
-    gpu = '1'
+    gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'train': False,
+            'train': True,
             'generate': False,
             'recursive': False,
             'analyse_kernels': False,
             'kernel_network_FIR': False,
             'kernel_network_IIR': False,
-            'plot_kernels': True}
+            'plot_kernels': False}
 
     def __init__(self):
         # training arguments
-        self.learning_rate = 0.0005
-        self.batch_size = 10000
+        self.learning_rate = 0.00005
+        self.batch_size = 32
         self.epochs = 5000
         self.split = 0.2
         self.val_freq = 50
@@ -31,12 +31,12 @@ class Args:
         self.num_plot = 1
         self.plot_ch = 1
         self.save_curves = True
-        self.load_model = True
+        self.load_model = False
         self.result_dir = os.path.join(
             'results',
             'simulated',
-            '8event_snr1_convpool8ch')
-        self.model = ConvPoolNet
+            '8event_snr1_sameasrest_nonotch_fullwave8ch')
+        self.model = WavenetFull
         self.dataset = EventSimulation
 
         # wavenet arguments
@@ -48,33 +48,33 @@ class Args:
         self.mu = 255
         self.ch_mult = 8
         self.groups = 1
-        self.kernel_size = 16
+        self.kernel_size = 2
         self.timesteps = 1
         self.num_classes = 118
-        self.sample_rate = 497 + self.timesteps
-        self.rf = 497
+        self.sample_rate = 2*512 + self.timesteps
+        self.rf = 512
         ks = self.kernel_size
         nl = int(np.log(self.rf) / np.log(ks))
         self.dilations = [ks**i for i in range(nl)]  # wavenet mode
-        self.dilations = [1] * 5  # no dilations
+        # self.dilations = [1] * 5  # no dilations
 
         # dataset arguments
         self.data_path = os.path.join('donders', '')
         self.num_channels = list(range(1))
         self.crop = 1
-        self.sr_data = 250
+        self.sr_data = 220
         self.num_components = 128
         self.resample = 7
         self.pca_path = os.path.join(self.data_path, 'pca_model')
         self.load_pca = False
         self.load_data = os.path.join(
-            'data', 'simulated', '8event_snr1', 'data.mat')
+            'data', 'simulated', '8event_snr1', 'filtered_sameasrest_nonotch.mat')
 
         # analysis arguments
-        self.generate_noise = 1
+        self.generate_noise = 0.61
         self.generate_length = self.sr_data * 1000
         self.generate_mode = 'IIR'
-        self.generate_input = 'shuffled_data'
+        self.generate_input = 'gaussian_noise'
         self.individual = True
         self.anal_lr = 0.05
         self.anal_epochs = 200
