@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Identity
-from torch.nn import MSELoss, LogSoftmax
+from torch.nn import MSELoss, LogSoftmax, Dropout
 from torch.optim import Adam
 import torch.nn.functional as F
 
@@ -27,6 +27,9 @@ class WavenetSimple(Module):
         self.activation = self.args.activation
         if self.args.linear:
             self.activation = Identity()
+
+        # add dropout to each layer
+        self.dropout = Dropout(args.p_drop)
 
     def build_model(self, args):
         '''
@@ -57,7 +60,7 @@ class WavenetSimple(Module):
         x = self.first_conv(x)
 
         for layer in self.cnn_layers:
-            x = self.activation(layer(x))
+            x = self.activation(self.dropout(layer(x)))
 
         return self.last_conv(x), x
 
@@ -100,7 +103,7 @@ class WavenetSimple(Module):
         for i in range(num_l + 1):
             x = self.cnn_layers[i](x)
             if i < num_l:
-                x = self.activation(x)
+                x = self.activation(self.dropout(x))
         return x
 
     def run_kernel(self, x, layer, num_kernel):
@@ -108,8 +111,15 @@ class WavenetSimple(Module):
         Compute the output of a specific kernel num_kernel
         in a specific layer (layer) to input x.
         '''
-        inp_filt = int(num_kernel/self.args.ch_mult)
-        out_filt = num_kernel % self.args.ch_mult
+        chid = self.args.channel_idx
+        ch = self.args.ch_mult
+
+        # input and output filter indices
+        out_filt = int(num_kernel/ch) + chid * ch
+        inp_filt = num_kernel % ch
+
+        # select specific channel
+        x = x[:, chid*ch:(chid+1)*ch, :]
 
         # deconstruct convolution to get specific kernel output
         x = F.conv1d(x[:, inp_filt:inp_filt + 1, :],
@@ -127,24 +137,25 @@ class WavenetSimple(Module):
         Compute the output for a specific layer num_l and kernel num_f.
         '''
         x = self.layer_output(x, num_l-1)
-        x = self.activation(x)
+        x = self.activation(self.dropout(x))
         x = self.run_kernel(x, self.cnn_layers[num_l], num_f)
 
         return -torch.mean(x)
 
-    def plot_welch(self, x, ax, args, i):
+    def plot_welch(self, x, ax, sr=1):
         '''
         Compute and plot (on ax) welch spectra of x.
         '''
-        f, Pxx_den = welch(x, args.sr_data, nperseg=4*args.sr_data)
+        f, Pxx_den = welch(x, self.args.sr_data, nperseg=4*self.args.sr_data)
         ax.plot(f, Pxx_den)
-        for freq in args.freqs:
+        for freq in self.args.freqs:
             ax.axvline(x=freq, color='red')
 
     def analyse_kernels(self):
         '''
         Learn input for each kernel to see what patterns they are sensitive to.
         '''
+        self.eval()
         folder = os.path.join(self.args.result_dir, 'kernel_analysis')
         if not os.path.isdir(folder):
             os.mkdir(folder)
@@ -188,7 +199,7 @@ class WavenetSimple(Module):
                 savemat(os.path.join(folder, name), {'X': inputs})
 
                 # compute fft of learned input
-                self.plot_welch(inputs, axs[num_filter], self.args, num_layer)
+                self.plot_welch(inputs, axs[num_filter], num_layer)
 
             name = '_indiv' if indiv else ''
             filename = os.path.join(
@@ -200,7 +211,7 @@ class WavenetSimple(Module):
         '''
         Wrapper around forward function to easily adapt the generate function.
         '''
-        return self.forward(inputs)[0].detach().reshape(channels, -1)
+        return self.forward(inputs)[0].detach().reshape(channels)
 
     def generate(self):
         '''
@@ -258,6 +269,15 @@ class WavenetSimple(Module):
         name = 'generated_' + input_mode + mode + str(noise) + '.mat'
         savemat(os.path.join(self.args.result_dir, name), {'X': data})
 
+        # compute welch spectra for each channel
+        fig, axs = plt.subplots(channels+1, figsize=(15, channels*6))
+        for ch in range(channels):
+            self.plot_welch(data[ch, :], axs[ch], ch)
+
+        path = os.path.join(self.args.result_dir, 'generated_freqs.svg')
+        fig.savefig(path, format='svg', dpi=1200)
+        plt.close('all')
+
         return data
 
     def randomize_kernel_input(self, data):
@@ -281,16 +301,18 @@ class WavenetSimple(Module):
         '''
         Get FIR properties for each kernel by running the whole network.
         '''
-        folder = os.path.join(self.args.result_dir, folder)
+        self.eval()
+        name = folder + 'ch' + str(self.args.channel_idx)
+        folder = os.path.join(self.args.result_dir, name)
         if not os.path.isdir(folder):
             os.mkdir(folder)
-        gen_len = self.args.generate_length
 
         # data is either drawn from gaussian or passed as argument to this func
-        data = np.random.normal(0, self.args.generate_noise, (gen_len))
+        shape = (self.args.num_channels, self.args.generate_length)
+        data = np.random.normal(0, self.args.generate_noise, shape)
         if generated_data is not None:
             data = generated_data
-        data = torch.Tensor(data).cuda().reshape(1, 1, -1)
+        data = torch.Tensor(data).cuda().reshape(1, self.args.num_channels, -1)
 
         data = self.first_conv(data)
 
@@ -305,7 +327,7 @@ class WavenetSimple(Module):
             self.kernel_FIR_plot(folder, data, i, layer)
 
             # compute output of current layer
-            data_f = self.activation(layer(data))
+            data_f = self.activation(self.dropout(layer(data)))
             data = self.residual(data, data_f)
 
     def kernel_FIR_plot(self, folder, data, i, layer, name='conv'):
@@ -317,12 +339,13 @@ class WavenetSimple(Module):
 
         filter_outputs = []
         for k in range(num_plots):
+            # TODO: this currently only visualizes kernels for first channel
             x = self.run_kernel(data, layer, k)
             x = x.detach().cpu().numpy().reshape(-1)
             filter_outputs.append(x)
 
             # compute fft of kernel output
-            self.plot_welch(x, axs[k], self.args, i)
+            self.plot_welch(x, axs[k], i)
 
         filter_outputs = np.array(filter_outputs)
         path = os.path.join(folder, name + str(i) + '.mat')
@@ -343,6 +366,7 @@ class WavenetSimple(Module):
         '''
         Plot kernels and frequency response of kernels.
         '''
+        self.eval()
         folder = os.path.join(self.args.result_dir, 'kernels')
         if not os.path.isdir(folder):
             os.mkdir(folder)
@@ -686,16 +710,13 @@ class ConvPoolNet(WavenetSimple):
 
         return -torch.mean(x)
 
-    def plot_welch(self, x, ax, args, i):
+    def plot_welch(self, x, ax, i):
         '''
         Compute and plot (on ax) welch spectra of x.
         The sampling rate in each layer (i) is halved.
         '''
-        sr = args.sr_data / 2**i
-        f, Pxx_den = welch(x, sr, nperseg=4*sr)
-        ax.plot(f, Pxx_den)
-        for freq in args.freqs:
-            ax.axvline(x=freq, color='red')
+        sr = self.args.sr_data / 2**i
+        super(ConvPoolNet).plot_welch(x, ax, sr)
 
     def scipy_freqz(self, filter_coeff, i):
         '''

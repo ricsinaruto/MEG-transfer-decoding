@@ -120,8 +120,9 @@ class EventSimulation(DondersData):
             # generate with AR2 recursively
             for t in range(lifetime):
                 past = self.data[:, count+t-args.sim_ar_order:count+t]
-                # TODO: fix this
-                self.data[:, count+t] = self.AR[state, :, :, :] * past
+                coeff = self.AR[state, :, :, :]
+                self.data[:, count+t] += np.einsum(
+                    'iij,ij->i', coeff, past[:, ::-1])
 
             # apply exponential damping to the current event
             zed = self.data[:, count:count+lifetime]

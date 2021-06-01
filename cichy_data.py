@@ -4,8 +4,10 @@ from mne.decoding import UnsupervisedSpatialFilter
 import pickle
 import torch
 
+from donders_data import DondersData
 
-class CichyData:
+
+class CichyData(DondersData):
     def __init__(self, args):
         self.args = args
 
@@ -47,34 +49,12 @@ class CichyData:
 
         self.set_common()
 
-    def set_common(self):
-        self.bs = self.args.batch_size
-        self.train_batches = int(self.x_train_t.shape[0] / self.bs + 1)
-        self.val_batches = int(self.x_val_t.shape[0] / self.bs + 1)
-
-    def normalize(self, x, mean=None, var=None):
-        x = x.transpose()
-        mean = np.mean(x, axis=0) if mean is None else mean
-        var = np.std(x, axis=0) if var is None else var
-        x = (x - mean)/var
-        return x.transpose(), mean, var
-
     def _normalize(self, x, channels):
         x = x.transpose(1, 0, 2).reshape(channels, -1)
         x = self.normalize(x)
         x = x.reshape(channels, -1, self.args.sample_rate).transpose(1, 0, 2)
 
         return x
-
-    def get_batch(self, i, data):
-        end = data.shape[0] if (i+1)*self.bs > data.shape[0] else (i+1)*self.bs
-        return data[i*self.bs:end, :, :]
-
-    def get_train_batch(self, i):
-        return self.get_batch(i, self.x_train_t)
-
-    def get_val_batch(self, i):
-        return self.get_batch(i, self.x_val_t)
 
     def load_data(self,
                   permute=False,

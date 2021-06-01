@@ -136,28 +136,33 @@ class Experiment:
 
         self.loss.print('Repeat baseline loss: ')
 
-    def AR_filter_analysis(self, params):
+    def plot_freqs(self, ax):
+        for freq in self.args.freqs:
+            ax.axvline(x=freq, color='red')
+
+    def AR_analysis(self, params):
         '''
-        Analysie the frequency properties of the learned AR filters.
-        params: the AR coefficients
+        Analysie the frequency properties of multivariate AR filters (params)
         '''
         # TODO: this is individual filters but we might also be interested in
         # looking at the sum of filters for a specific output channel
         sr = self.args.sr_data
-        filters = params.reshape(-1, params.shape[2])
-        num_filt = min(filters.shape[0], 300)
-        fig_fir, axs_fir = plt.subplots(num_filt+1, figsize=(20, num_filt*3))
-        fig_iir, axs_iir = plt.subplots(num_filt+1, figsize=(20, num_filt*3))
+        filters = params.reshape(params.shape[0], -1).transpose()
+        num_filt = min(filters.shape[0], self.args.kernel_limit)
+        fig_fir, axs_fir = plt.subplots(num_filt+1, figsize=(15, num_filt*6))
+        fig_iir, axs_iir = plt.subplots(num_filt+1, figsize=(15, num_filt*6))
 
         for i in range(num_filt):
             # frequency spectra as FIR filter
             w, h = signal.freqz(b=filters[i], fs=sr, worN=5*sr)
             axs_fir[i].plot(w, np.abs(h))
+            self.plot_freqs(axs_fir[i])
 
             # frequency spectra as IIR filter
-            filter_coeff = np.append(1, filters[i])
+            filter_coeff = np.append(-1, filters[i])
             w, h = signal.freqz(b=1, a=filter_coeff, fs=sr, worN=5*sr)
-            axs_fir[i].plot(w, np.abs(h))
+            axs_iir[i].plot(w, np.abs(h))
+            self.plot_freqs(axs_iir[i])
 
         path = os.path.join(self.args.result_dir, 'AR_FIR.svg')
         fig_fir.savefig(path, format='svg', dpi=1200)
@@ -166,11 +171,14 @@ class Experiment:
         fig_iir.savefig(path, format='svg', dpi=1200)
         plt.close('all')
 
+        computation = 'ji,ij->i' if self.args.uni else 'jii,ij->i'
+        shape = (self.args.num_channels, self.args.generate_length)
+        data = np.random.normal(0, 1, shape)
+
         # generate in IIR mode
-        data = np.random.normal(0, 1, (self.args.sr_data*1000))
-        for t in range(params.shape[2], len(data)):
-            # TODO: fix and validate this part
-            data[t] += params * data[t-params.shape[2]:t]
+        for t in range(params.shape[0], data.shape[1]):
+            inputs = data[:, t-params.shape[0]:t]
+            data[:, t] += np.einsum(computation, params, inputs[:, ::-1])
 
         path = os.path.join(self.args.result_dir, 'generatedAR.mat')
         savemat(path, {'X': data})
@@ -191,41 +199,52 @@ class Experiment:
         func = self.AR_uni if self.args.uni else self.AR_multi
         outputs, target, filters = func(x_train, x_val, outputs, target, ts)
 
-        self.AR_filter_analysis(filters)
+        self.AR_analysis(filters)
 
         outputs = torch.Tensor(outputs).float().cuda()
         target = torch.Tensor(target).float().cuda()
 
         # save validation loss and generated variance for all future timesteps
         path = os.path.join(self.args.result_dir, 'timestep_AR.txt')
-        with open(path, 'w') as f:
+        with open(path, 'w') as file:
             for i in range(ts):
                 loss = self.model.ar_loss(outputs[:, :, i], target[:, :, i])
                 var = np.std(outputs[:, :, i].reshape(-1).cpu().numpy())
 
-                f.write(str(loss.item()) + '\t' + str(var) + '\n')
+                file.write(str(loss.item()) + '\t' + str(var) + '\n')
                 print('AR validation loss ts', i+1, ': ', loss.item(),
                       ' Variance: ', var)
+
+                path = os.path.join(self.args.result_dir,
+                                    'ts' + str(i) + 'AR.txt')
+                with open(path, 'w') as f:
+                    for ch in range(self.args.num_channels):
+                        loss = self.model.ar_loss(outputs[ch, :, i],
+                                                  target[ch, :, i])
+                        out = outputs[ch, :, i].reshape(-1).cpu().numpy()
+                        var = np.std(out)
+
+                        f.write(str(loss.item()) + '\t' + str(var) + '\n')
 
     def AR_multi(self, x_train, x_val, generated, target, ts):
         '''
         Train and validate a multivariate AR model.
         '''
         model = sails.modelfit.OLSLinearModel.fit_model(x_train, self.AR_order)
+        coeff = model.parameters[:, :, 1:]
 
         # generate prediction for each timestep
         for t in range(model.order, x_val.shape[1] - ts):
             # at each timestep predict in the future recursively up to ts
             for i in range(ts):
+                # true input + generated past so far
                 concat = (x_val[:, t-model.order+i:t], generated[:, t, :i])
-                inputs = np.concatenate(concat, axis=1)
+                inputs = np.concatenate(concat, axis=1)[:, ::-1]
 
                 target[:, t, i] = x_val[:, t+i]
-                # TODO: fix and validate this part
-                # could use numpy einsum
-                generated[:, t, i] = model.parameters * inputs
+                generated[:, t, i] = np.einsum('iij,ij->i', coeff, inputs)
 
-        return generated, target, model.parameters[:, :, 1:]
+        return generated, target, coeff.transpose(2, 0, 1)
 
     def AR_uni(self, x_train, x_val, generated, target, ts):
         '''
@@ -236,7 +255,7 @@ class Experiment:
         # create a separate AR model for each channel.
         for ch in range(x_val.shape[0]):
             gen, targ, params = self.AR_multi(x_train[ch:ch+1, :, :],
-                                              x_val[ch:ch+1, :, :],
+                                              x_val[ch:ch+1, :],
                                               generated[ch:ch+1, :, :],
                                               target[ch:ch+1, :, :],
                                               ts)
@@ -244,9 +263,8 @@ class Experiment:
             target[ch:ch+1, :, :] = targ
             filters.append(params)
 
-        # TODO: which axis to concatenate over
-        filters = np.concatenate(*filters, axis=5)
-        return generated, target, filters
+        filters = np.concatenate(tuple(filters), axis=1)
+        return generated, target, filters.reshape(-1, x_val.shape[0])
 
     def recursive(self):
         '''
