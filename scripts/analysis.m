@@ -20,20 +20,20 @@ save(strcat('simulated/8event_snr1/filtered125hz.mat'), 'X')
 
 %% Plot wavelet and welch spectra of timeseries
 figure;
-cwt(X(1, 20000:29000), fs, 'TimeBandwidth', time_bandwidth);
+cwt(X(1, 25000:35000), fs, 'TimeBandwidth', time_bandwidth);
 for i = 1:size(freqs, 2)
     yline(freqs(i), 'white');
 end
 
 figure;
-[Xpxx, Xf] = pwelch(X(1, 1000:end), fs*2, fs, 1:0.1:100, fs);
+[Xpxx, Xf] = pwelch(X(1, 1000:end), fs*2, fs, 0.01:0.1:fs*0.49, fs);
 plot(Xf, Xpxx);
 for i = 1:size(freqs, 2)
     xline(freqs(i), 'red');
 end
 
 figure;
-plot(X(1, 1:3000));
+plot(X(1, 5000:6000));
 
 %% Extract timeseries for the known frequencies
 % compute wavelet to get timeseries for all frequencies

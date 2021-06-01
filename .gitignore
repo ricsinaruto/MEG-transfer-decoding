@@ -1,5 +1,8 @@
 scripts/donders_data/*
 scripts/simulated_data/*
+scripts/mrc_data/*
 data/*
 results/*
 tmp/*
+*.asv
+*.mat

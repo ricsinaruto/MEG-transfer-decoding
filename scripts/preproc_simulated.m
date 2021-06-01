@@ -7,22 +7,23 @@ high_pass = 0.1;
 low_pass = 50;
 bad_significance = 0.2;
 fsample = 250;
+n_channels = 128;
 
-data_dir = 'simulated';
+data_dir = 'mrc_data';
 
 s.type = 'continuous';
-s.Nsamples = size(X, 2);
+s.Nsamples = size(x_train, 2);
 s.Fsample = fsample;
 s.timeOnset = 0;
-s.data = file_array('data.mat', [1, s.Nsamples]);
-s.fname = 'dsub-data.mat';
-s.path = strcat('/Users/ricsi/research/donders/', data_dir);
+s.data = file_array('x_train.mat', [n_channels, s.Nsamples]);
+s.fname = 'x_train.mat';
+s.path = strcat('/Users/ricsi/Documents/GitHub/MEG-transfer-decoding/scripts/', data_dir);
 
-channels.type = 'MEGGRAD';
-channels.bad = 0;
-channels.label = 'SIM';
-channels.units = 'fT';
-s.channels = channels;
+type = mat2cell(repmat('MEGGRAD', n_channels, 1), ones([1 n_channels]));
+bad = mat2cell(repmat(0, n_channels, 1), ones([1 n_channels]));
+label = mat2cell(repmat('SIM', n_channels, 1), ones([1 n_channels]));
+units = mat2cell(repmat('fT', n_channels, 1), ones([1 n_channels]));
+s.channels = struct('type', type, 'bad', bad, 'label', label, 'units', units);
 
 trials.label = 'Undefined';
 trials.events = {};
