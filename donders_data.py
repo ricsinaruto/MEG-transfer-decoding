@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 from scipy.io import savemat, loadmat
 import torch
@@ -18,36 +19,26 @@ class DondersData:
         '''
         self.args = args
         self.shift = args.sample_rate - args.timesteps - args.rf + 1
+        self.mean = None
+        self.var = None
+
+        # load normalization coefficients
+        if not args.save_norm:
+            norm = pickle.load(open(args.norm_path, 'rb'))
+            self.mean = norm['means']
+            self.var = norm['vars']
 
         # load pickled data directly, no further processing required
         if args.load_data:
-            chn = args.num_channels
-            data = loadmat(args.load_data)
-            self.x_train = np.array(data['x_train'])[chn, :]
-            self.x_val = np.array(data['x_val'])[chn, :]
-            x_train_t = np.array(data['x_train_t'])[:, chn, :]
-            x_val_t = np.array(data['x_val_t'])[:, chn, :]
-            self.x_train_t = torch.Tensor(x_train_t).float().cuda()
-            self.x_val_t = torch.Tensor(x_val_t).float().cuda()
-
-            args.num_channels = len(args.num_channels)
-            self.set_common()
+            self.load_mat_data(args)
             return
 
         # whether to load an already created PCA model
         if args.load_pca:
             pca_model = pickle.load(open(args.pca_path, 'rb'))
 
-        # whether we are working with one subject or a directory of them
-        if 'sub' in args.data_path:
-            paths = [args.data_path]
-        else:
-            paths = os.listdir(args.data_path)
-            paths = [os.path.join(args.data_path, p) for p in paths]
-            paths = [p for p in paths if os.path.isdir(p)]
-
         # load the raw subject data
-        x_trains, x_vals, disconts = self.load_data(args, paths)
+        x_trains, x_vals, disconts = self.load_data(args)
 
         # this is the continuous data for AR models
         self.x_train = np.concatenate(tuple(x_trains), axis=1)
@@ -62,10 +53,14 @@ class DondersData:
 
         # reduce number of channels with PCA model and normalize both splits
         if args.num_components or args.load_pca:
-            print(np.sum(pca_model.explained_variance_ratio_))
+            print(pca_model.explained_variance_ratio_)
+            print('Explained variance: ',
+                  np.sum(pca_model.explained_variance_ratio_))
+
             self.x_train = pca_model.transform(
                 self.x_train.transpose()).transpose()
             x_val = pca_model.transform(self.x_val.transpose()).transpose()
+            args.num_channels = args.num_components
 
             # compute inverse transform to see reconstruction error
             x_rec = pca_model.inverse_transform(x_val.transpose())
@@ -77,8 +72,14 @@ class DondersData:
             self.x_val = x_val
 
             # normalize train and validation splits
-            self.x_train, self.mean, self.var = self.normalize(self.x_train)
+            self.x_train, _, _ = self.normalize(
+                self.x_train, self.mean, self.var)
             self.x_val, _, _ = self.normalize(self.x_val, self.mean, self.var)
+
+            # save the means and variances of data
+            if args.save_norm:
+                norm = {'means': self.mean, 'vars': self.var}
+                pickle.dump(norm, open(args.norm_path, 'wb'))
 
         # create examples from continuous data
         train_eps = []
@@ -90,6 +91,9 @@ class DondersData:
                 x_val = pca_model.transform(x_val.transpose()).transpose()
                 x_train, _, _ = self.normalize(x_train, self.mean, self.var)
                 x_val, _, _ = self.normalize(x_val, self.mean, self.var)
+
+            if discont[0] != 0:
+                discont = [0] + discont
 
             # create examples by taking into account discontinuities
             val_ln = len(x_val[0])
@@ -111,11 +115,33 @@ class DondersData:
         self.x_train_t = torch.Tensor(train_ep).float().cuda()
         self.x_val_t = torch.Tensor(val_ep).float().cuda()
 
-        # save final data to disk for easier loading next time
-        dump = {'x_train': self.x_train, 'x_val': self.x_val,
-                'x_train_t': train_ep, 'x_val_t': val_ep}
-        savemat(args.dump_data, dump)
+        if not os.path.isdir(os.path.split(args.dump_data)[0]):
+            os.mkdir(os.path.split(args.dump_data)[0])
 
+        # save final data to disk for easier loading next time
+        for i in range(args.num_channels):
+            dump = {'x_train': self.x_train[i:i+1, :],
+                    'x_val': self.x_val[i:i+1, :],
+                    'x_train_t': train_ep[:, i:i+1:, :],
+                    'x_val_t': val_ep[:, i:i+1, :]}
+            savemat(args.dump_data + 'ch' + str(i) + '.mat', dump)
+
+        self.set_common()
+
+    def load_mat_data(self, args):
+        '''
+        Loads ready-to-train splits from mat files.
+        '''
+        chn = args.num_channels
+        data = loadmat(args.load_data)
+        self.x_train = np.array(data['x_train'])[chn, :]
+        self.x_val = np.array(data['x_val'])[chn, :]
+        x_train_t = np.array(data['x_train_t'])[:, chn, :]
+        x_val_t = np.array(data['x_val_t'])[:, chn, :]
+        self.x_train_t = torch.Tensor(x_train_t).float().cuda()
+        self.x_val_t = torch.Tensor(x_val_t).float().cuda()
+
+        args.num_channels = len(args.num_channels)
         self.set_common()
 
     def get_batch(self, i, data):
@@ -149,10 +175,18 @@ class DondersData:
         x = (x - mean)/var
         return x.transpose(), mean, var
 
-    def load_data(self, args, paths):
+    def load_data(self, args):
         '''
-        Load raw data from multiple subjects (paths).
+        Load raw data from multiple subjects.
         '''
+        # whether we are working with one subject or a directory of them
+        if 'sub' in args.data_path:
+            paths = [args.data_path]
+        else:
+            paths = os.listdir(args.data_path)
+            paths = [os.path.join(args.data_path, p) for p in paths]
+            paths = [p for p in paths if os.path.isdir(p)]
+
         x_trains = []
         x_vals = []
         disconts = []

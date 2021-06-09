@@ -13,29 +13,29 @@ class Args:
     gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'train': False,
+            'train': True,
             'generate': False,
-            'recursive': True,
+            'recursive': False,
             'analyse_kernels': False,
-            'kernel_network_FIR': False,
+            'kernel_network_FIR': True,
             'kernel_network_IIR': False,
             'plot_kernels': False}
 
     def __init__(self):
         # training arguments
-        self.learning_rate = 0.00005
-        self.batch_size = 800
+        self.learning_rate = 0.0001
+        self.batch_size = 512
         self.epochs = 5000
         self.val_freq = 50
         self.print_freq = 1
         self.num_plot = 1
         self.plot_ch = 1
         self.save_curves = True
-        self.load_model = True
-        self.result_dir = os.path.join(
+        self.load_model = False
+        self.result_dir = [os.path.join(
             'results',
             'mrc',
-            'subject1_pca69_simplewave8ch69group16ks')
+            '50subjects_ch2_simplewave8ch')]
         self.model = WavenetSimple
         self.dataset = MRCData
 
@@ -47,44 +47,48 @@ class Args:
         self.k_CPC = 1
         self.mu = 255
         self.ch_mult = 8
-        self.groups = 69
-        self.kernel_size = 16
+        self.groups = 1
+        self.conv1x1_groups = 1
+        self.kernel_size = 2
         self.timesteps = 1
         self.num_classes = 118
-        self.sample_rate = 2*466 + self.timesteps
-        self.rf = 466
+        self.sample_rate = 2*512 + self.timesteps
+        self.rf = 512
         ks = self.kernel_size
         nl = int(np.log(self.rf) / np.log(ks))
         self.dilations = [ks**i for i in range(nl)]  # wavenet mode
-        self.dilations = [1] + [2] + [4] * 7  # costum dilations
+        #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
                                  'mrc_meguk', 'eo-elekta',
-                                 'preproc_nonotch.opt', 'mat_data')
-        self.data_path = os.path.join(data_path, 'subject1.mat')
-        self.num_channels = list(range(69))
+                                 'preproc_nonotch.opt', 'mat_data',
+                                 '50subjects')
+        self.data_path = [os.path.join(data_path)]
+        self.num_channels = [2]#list(range(128))
         self.crop = 1
         self.split = 0.2
         self.sr_data = 250
-        self.num_components = 69
+        self.num_components = 128
         self.resample = 7
-        self.pca_path = os.path.join(data_path, 'subject1', 'pca69_model_subject1')
+        self.save_norm = True
+        self.norm_path = [os.path.join(data_path, 'norm_coeff')]
+        self.pca_path = [os.path.join(data_path, 'pca128_model')]
         self.load_pca = True
-        self.dump_data = os.path.join(data_path, 'subject1', 'sub1pca69rf466.mat')
+        self.dump_data = [os.path.join(data_path, 'train_data_discontfix', 'train_pca128')]
         self.load_data = self.dump_data
 
         # analysis arguments
-        self.generate_noise = 0.74
-        self.generate_length = self.sr_data * 500
+        self.generate_noise = 1
+        self.generate_length = self.sr_data * 1000
         self.generate_mode = 'IIR'
         self.generate_input = 'gaussian_noise'
         self.individual = True
-        self.anal_lr = 0.05
+        self.anal_lr = 0.001
         self.anal_epochs = 200
-        self.norm_coeff = 0.002
+        self.norm_coeff = 0.0001
         self.kernel_limit = 300
-        self.channel_idx = 6
+        self.channel_idx = 0
 
         # simulation arguments
         self.nonlinear_prenoise = True
@@ -105,3 +109,5 @@ class Args:
         # AR model arguments
         self.order = 64
         self.uni = True
+        self.save_AR = True
+        self.AR_load_path = self.result_dir

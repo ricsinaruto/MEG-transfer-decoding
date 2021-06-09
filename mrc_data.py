@@ -1,14 +1,54 @@
+import os
+import copy
+import torch
 import numpy as np
-from mat4py import loadmat
+from scipy.io import loadmat
 
 from donders_data import DondersData
 
 
 class MRCData(DondersData):
-    def load_data(self, args, paths):
+    def load_mat_data(self, args):
         '''
-        Load raw data from multiple subjects (paths).
+        Loads ready-to-train splits from mat files.
         '''
+        chn = args.num_channels
+        x_trains = []
+        x_vals = []
+        x_train_ts = []
+        x_val_ts = []
+
+        # load data for each channel
+        for i in chn:
+            data = loadmat(args.load_data + 'ch' + str(i) + '.mat')
+            x_trains.append(np.array(data['x_train']))
+            x_vals.append(np.array(data['x_val']))
+            x_train_ts.append(np.array(data['x_train_t']))
+            x_val_ts.append(np.array(data['x_val_t']))
+
+        self.x_train = np.concatenate(tuple(x_trains))
+        self.x_val = np.concatenate(tuple(x_vals))
+        x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
+        x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
+        self.x_train_t = torch.Tensor(x_train_t).float().cuda()
+        self.x_val_t = torch.Tensor(x_val_t).float().cuda()
+
+        args.num_channels = len(args.num_channels)
+        self.set_common()
+
+    def load_data(self, args):
+        '''
+        Load raw data from multiple subjects.
+        '''
+        if '.mat' in args.data_path:
+            paths = [args.data_path]
+        else:
+            paths = os.listdir(args.data_path)
+            paths = [os.path.join(args.data_path, p) for p in paths]
+            paths = [p for p in paths if not os.path.isdir(p)]
+            paths = [p for p in paths if 'subject' in p.split('/')[-1]]
+        print('Number of subjects: ', len(paths))
+
         resample = int(1000/args.sr_data)
         x_trains = []
         x_vals = []
@@ -18,10 +58,16 @@ class MRCData(DondersData):
             dat = loadmat(path)
 
             # discontinuous segment lengths are saved in T
-            d = np.array(dat['T'])
-            for i, val in enumerate(d):
-                d[i] = int(sum(d[:i+1])/resample)
-            disconts.append(d)
+            d = np.array(dat['T'])[0].astype(int)
+            try:
+                _ = len(d)
+            except TypeError as e:
+                d = np.array([0])
+                print(str(e))
+
+            for i, val in enumerate(d[1:]):
+                d[i+1] = d[i] + val
+            disconts.append(list((d/resample).astype(int)))
 
             # choose first 306 channels and downsample
             x_train = np.transpose(np.array(dat['X']))

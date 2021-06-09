@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import sails
 import torch
+import random
+import pickle
 
 from scipy import signal
 from scipy.io import savemat
@@ -19,11 +21,11 @@ os.environ["CUDA_VISIBLE_DEVICES"] = Args.gpu
 
 
 class Experiment:
-    def __init__(self):
+    def __init__(self, args):
         '''
         Initialize model, dataset and optimizer.
         '''
-        self.args = Args()
+        self.args = args
         self.loss = Loss()
         self.val_losses = []
         self.train_losses = []
@@ -37,12 +39,12 @@ class Experiment:
 
         # initialize dataset
         self.dataset = self.args.dataset(self.args)
-        self.args.dataset = self.dataset
 
         # load model if path is specified
         self.model_path = os.path.join(self.args.result_dir, 'model.pt')
         if self.args.load_model:
             self.model = torch.load(self.model_path)
+            self.args.dataset = self.dataset
             self.model.args = self.args
         else:
             self.model = self.args.model(self.args).cuda()
@@ -88,7 +90,7 @@ class Experiment:
                 self.val_losses.append(loss)
                 if loss < best_val:
                     best_val = loss
-                    torch.save(self.model, self.model_path)
+                    torch.save(self.model, self.model_path, pickle_protocol=4)
 
                 if self.args.save_curves:
                     self.save_curves()
@@ -226,11 +228,19 @@ class Experiment:
 
                         f.write(str(loss.item()) + '\t' + str(var) + '\n')
 
-    def AR_multi(self, x_train, x_val, generated, target, ts):
+    def AR_multi(self, x_train, x_val, generated, target, ts, ch='multi'):
         '''
         Train and validate a multivariate AR model.
         '''
-        model = sails.modelfit.OLSLinearModel.fit_model(x_train, self.AR_order)
+        # load or train new model
+        path = os.path.join(self.args.AR_load_path, 'ARch' + ch)
+        if self.args.save_AR:
+            model = sails.modelfit.OLSLinearModel.fit_model(x_train,
+                                                            self.AR_order)
+            pickle.dump(model, open(path, 'wb'))
+        else:
+            model = pickle.load(open(path, 'rb'))
+
         coeff = model.parameters[:, :, 1:]
 
         # generate prediction for each timestep
@@ -258,7 +268,8 @@ class Experiment:
                                               x_val[ch:ch+1, :],
                                               generated[ch:ch+1, :, :],
                                               target[ch:ch+1, :, :],
-                                              ts)
+                                              ts,
+                                              str(ch))
             generated[ch:ch+1, :, :] = gen
             target[ch:ch+1, :, :] = targ
             filters.append(params)
@@ -307,9 +318,50 @@ class Experiment:
 
             file.write(str(loss.item()) + '\t' + str(var) + '\n')
 
-            #self.freq_loss(generated, target)
+            # self.freq_loss(generated, target)
 
         file.close()
+
+    def feature_importance(self):
+        '''
+        Evaluate how important is each timestep to prediction
+        '''
+        self.model.eval()
+        rf = self.args.rf
+        bs = self.args.batch_size
+        chs = list(range(self.args.num_channels))
+
+        x_val = self.dataset.x_val
+        x_val = torch.Tensor(x_val).float().cuda()
+
+        losses = []
+        # loop over timestep positions in input
+        for i in list(range(1, rf))[::-1]:
+            losses.append([])
+            # loop over timesteps
+            for b in range(int((x_val.shape[1]-rf)/bs)-1):
+                inputs = [x_val[:, b*bs+k:b*bs+k+rf+1] for k in range(bs)]
+                inputs = torch.stack(inputs)
+
+                # permute the i-th timestep
+                random.shuffle(chs)
+                inputs = (inputs[:, :, :i],
+                          inputs[:, chs, i:i+1],
+                          inputs[:, :, i+1:])
+
+                inputs = torch.cat(inputs, dim=2)
+
+                loss = self.model.loss(inputs, b, train=False)[0]
+                losses[-1].append(loss.item())
+
+            losses[-1] = sum(losses[-1])/len(losses[-1])
+            print(losses[-1])
+
+        # save to file loss for each permuted timestep
+        path = os.path.join(self.args.result_dir, 'permutation_losses.txt')
+        with open(path, 'w') as f:
+            for loss in losses:
+                f.write(str(loss) + '\n')
 
     def freq_loss(self, generated, target):
         '''
@@ -317,8 +369,9 @@ class Experiment:
         generated: generated timeseries for validation data
         target: ground truth validation data
         '''
+        length = self.dataset.x_val.shape[1]
         for i, freq in enumerate(self.args.freqs):
-            part = self.dataset.stc[self.shift+self.ts:self.dataset.x_val.shape[1]]
+            part = self.dataset.stc[self.shift+self.ts:length]
             ind = np.where(part == i)
             loss = self.model.ar_loss(generated[ind, :, 0], target[ind, :, 0])
             print('Frequency ', freq, ' loss: ', loss.item())
@@ -353,26 +406,39 @@ class Experiment:
 
 
 def main():
-    e = Experiment()
+    # if list of paths is given, then process everything individually
+    args = Args()
+    for i, d_path in enumerate(args.data_path):
+        args_pass = Args()
+        args_pass.data_path = d_path
+        args_pass.result_dir = args.result_dir[i]
+        args_pass.dump_data = args.dump_data[i]
+        args_pass.load_data = args.load_data[i]
+        args_pass.norm_path = args.norm_path[i]
+        args_pass.pca_path = args.pca_path[i]
+        args_pass.AR_load_path = args.AR_load_path[i]
+        e = Experiment(args_pass)
 
-    if Args.func['repeat_baseline']:
-        e.repeat_baseline()
-    if Args.func['AR_baseline']:
-        e.AR_baseline()
-    if Args.func['train']:
-        e.train()
-    if Args.func['analyse_kernels']:
-        e.analyse_kernels()
-    if Args.func['plot_kernels']:
-        e.plot_kernels()
-    if Args.func['generate']:
-        e.generate()
-    if Args.func['recursive']:
-        e.recursive()
-    if Args.func['kernel_network_FIR']:
-        e.kernel_network_FIR()
-    if Args.func['kernel_network_IIR']:
-        e.kernel_network_IIR()
+        if Args.func['repeat_baseline']:
+            e.repeat_baseline()
+        if Args.func['AR_baseline']:
+            e.AR_baseline()
+        if Args.func['train']:
+            e.train()
+        if Args.func['analyse_kernels']:
+            e.analyse_kernels()
+        if Args.func['plot_kernels']:
+            e.plot_kernels()
+        if Args.func['generate']:
+            e.generate()
+        if Args.func['recursive']:
+            e.recursive()
+        if Args.func['kernel_network_FIR']:
+            e.kernel_network_FIR()
+        if Args.func['kernel_network_IIR']:
+            e.kernel_network_IIR()
+        if Args.func['feature_importance']:
+            e.feature_importance()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import random
 
 from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Identity
 from torch.nn import MSELoss, LogSoftmax, Dropout
@@ -36,10 +38,12 @@ class WavenetSimple(Module):
         Specify the layers of the model.
         '''
         self.ch = args.ch_mult * args.num_channels
+        conv1x1_groups = args.conv1x1_groups
         modules = []
 
         # 1x1 convolution to project to hidden channels
-        self.first_conv = Conv1d(args.num_channels, self.ch, kernel_size=1)
+        self.first_conv = Conv1d(
+            args.num_channels, self.ch, kernel_size=1, groups=conv1x1_groups)
 
         # each layer consists of a dilated convolution
         # followed by a nonlinear activation
@@ -52,7 +56,8 @@ class WavenetSimple(Module):
                                   groups=args.groups))
 
         # 1x1 convolution to go back to original channel dimension
-        self.last_conv = Conv1d(self.ch, args.num_channels, kernel_size=1)
+        self.last_conv = Conv1d(
+            self.ch, args.num_channels, kernel_size=1, groups=conv1x1_groups)
 
         self.cnn_layers = Sequential(*modules)
 
@@ -111,6 +116,7 @@ class WavenetSimple(Module):
         Compute the output of a specific kernel num_kernel
         in a specific layer (layer) to input x.
         '''
+        # TODO: current assumption is that the network is fully depthwise
         chid = self.args.channel_idx
         ch = self.args.ch_mult
 
@@ -156,11 +162,15 @@ class WavenetSimple(Module):
         Learn input for each kernel to see what patterns they are sensitive to.
         '''
         self.eval()
-        folder = os.path.join(self.args.result_dir, 'kernel_analysis')
+        indiv = self.args.individual
+        chid = self.args.channel_idx
+        input_len = self.args.generate_length
+
+        folder = os.path.join(self.args.result_dir,
+                              'kernel_analysis_ch' + str(chid))
         if not os.path.isdir(folder):
             os.mkdir(folder)
 
-        indiv = self.args.individual
         func = self.kernel_output if indiv else self.channel_output
         num_filters = self.args.ch_mult**2 if indiv else self.args.ch_mult
         figsize = (15, 10*num_filters)
@@ -172,7 +182,7 @@ class WavenetSimple(Module):
             for num_filter in range(num_filters):
                 # optimize input signal for a given kernel
                 batch = torch.randn(
-                    (1, 1, self.args.rf*20-self.args.timesteps),
+                    (1, self.args.num_channels, input_len),
                     requires_grad=True,
                     device='cuda')
                 optimizer = Adam([batch], lr=self.args.anal_lr)
@@ -330,17 +340,39 @@ class WavenetSimple(Module):
             data_f = self.activation(self.dropout(layer(data)))
             data = self.residual(data, data_f)
 
+    def run_kernel_multi(self, x, layer, num_kernel):
+        '''
+        Compute the output of a specific kernel num_kernel
+        in a specific layer (layer) to input x.
+        '''
+        # input and output filter indices
+        out_filt = random.randint(0, self.ch-1)
+        inp_filt = random.randint(0, self.ch-1)
+
+        # deconstruct convolution to get specific kernel output
+        x = F.conv1d(x[:, inp_filt:inp_filt + 1, :],
+                     layer.weight[
+                        out_filt:out_filt + 1, inp_filt:inp_filt + 1, :],
+                     layer.bias[out_filt:out_filt + 1],
+                     layer.stride,
+                     layer.padding,
+                     layer.dilation)
+
+        return x
+
     def kernel_FIR_plot(self, folder, data, i, layer, name='conv'):
         '''
         Plot FIR response of kernels in current layer (i) to input data.
         '''
-        num_plots = min(self.args.kernel_limit, self.args.ch_mult**2)
+        num_plots = self.args.kernel_limit
         fig, axs = plt.subplots(num_plots+1, figsize=(20, num_plots*3))
+
+        multi = self.args.groups == 1
+        kernel_func = self.run_kernel_multi if multi else self.run_kernel
 
         filter_outputs = []
         for k in range(num_plots):
-            # TODO: this currently only visualizes kernels for first channel
-            x = self.run_kernel(data, layer, k)
+            x = kernel_func(data, layer, k)
             x = x.detach().cpu().numpy().reshape(-1)
             filter_outputs.append(x)
 
@@ -367,15 +399,27 @@ class WavenetSimple(Module):
         Plot kernels and frequency response of kernels.
         '''
         self.eval()
-        folder = os.path.join(self.args.result_dir, 'kernels')
+        ks = self.args.kernel_size
+        mode = self.args.generate_mode
+        chid = self.args.channel_idx
+        ch = self.args.ch_mult
+
+        name = 'kernels' + mode + 'ch' + str(chid)
+        folder = os.path.join(self.args.result_dir, name)
         if not os.path.isdir(folder):
             os.mkdir(folder)
 
-        ks = self.args.kernel_size
+        weights = {'X': self.first_conv.weight.detach().cpu().numpy()}
+        savemat(os.path.join(self.args.result_dir, 'first_conv.mat'), weights)
+        weights = {'X': self.last_conv.weight.detach().cpu().numpy()}
+        savemat(os.path.join(self.args.result_dir, 'last_conv.mat'), weights)
+
+        func = self.scipy_freqz_IIR if mode == 'IIR' else self.scipy_freqz_FIR
 
         all_kernels = []
         for i, layer in enumerate(self.cnn_layers):
             kernels = layer.weight.detach().cpu().numpy()
+            kernels = kernels[chid*ch:(chid+1)*ch, :, :]
             all_kernels.append(kernels)
             kernels = kernels.reshape(-1, ks)
 
@@ -397,8 +441,7 @@ class WavenetSimple(Module):
                 filter_coeff.append(kernels[k, 0])
                 filter_coeff = np.array(filter_coeff)
 
-                # filter_coeff = np.append(1, filter_coeff)
-                w, h = self.scipy_freqz(filter_coeff, i)
+                w, h = func(filter_coeff, i)
                 axs_freq[k].plot(w, np.abs(h))
 
                 for freq in self.args.freqs:
@@ -414,12 +457,20 @@ class WavenetSimple(Module):
 
         # self.multiplied_kernels(all_kernels)
 
-    def scipy_freqz(self, filter_coeff, i):
+    def scipy_freqz_FIR(self, filter_coeff, i):
         '''
         Helper function for the signal.freqz function.
         '''
         sr = self.args.sr_data
         return signal.freqz(b=filter_coeff, fs=sr, worN=5*sr)
+
+    def scipy_freqz_IIR(self, filter_coeff, i):
+        '''
+        Helper function for the signal.freqz function.
+        '''
+        sr = self.args.sr_data
+        filter_coeff = np.append(-1, filter_coeff)
+        return signal.freqz(b=1, a=filter_coeff, fs=sr, worN=5*sr)
 
     def multiplied_kernels(self, all_kernels):
         pass
