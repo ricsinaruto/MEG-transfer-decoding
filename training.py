@@ -72,8 +72,8 @@ class Experiment:
             # self.dataset.x_train_t = self.dataset.x_train_t[ind, :, :]
 
             for i in range(self.dataset.train_batches):
-                batch = self.dataset.get_train_batch(i)
-                loss, _, _, loss2 = self.model.loss(batch, i, train=True)
+                batch, sid = self.dataset.get_train_batch(i)
+                loss, _, _, loss2 = self.model.loss(batch, i, sid, train=True)
 
                 loss.backward()
                 self.optimizer.step()
@@ -121,8 +121,8 @@ class Experiment:
         self.model.eval()
 
         for i in range(self.dataset.val_batches):
-            batch = self.dataset.get_val_batch(i)
-            loss, _, _, loss2 = self.model.loss(batch, i, train=False)
+            batch, sid = self.dataset.get_val_batch(i)
+            loss, _, _, loss2 = self.model.loss(batch, i, sid, train=False)
             self.loss.append(loss, loss2)
 
         loss = self.loss.print('Validation loss: ')

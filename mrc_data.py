@@ -19,22 +19,21 @@ class MRCData(DondersData):
         x_val_ts = []
 
         # load data for each channel
-        for i in chn:
+        for index, i in enumerate(chn):
             data = loadmat(args.load_data + 'ch' + str(i) + '.mat')
             x_trains.append(np.array(data['x_train']))
             x_vals.append(np.array(data['x_val']))
             x_train_ts.append(np.array(data['x_train_t']))
             x_val_ts.append(np.array(data['x_val_t']))
 
+            if index == 0:
+                self.sub_id['train'] = np.array(data['sub_id_train'])
+                self.sub_id['val'] = np.array(data['sub_id_val'])
+
         self.x_train = np.concatenate(tuple(x_trains))
         self.x_val = np.concatenate(tuple(x_vals))
-        x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
-        x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
-        self.x_train_t = torch.Tensor(x_train_t).float().cuda()
-        self.x_val_t = torch.Tensor(x_val_t).float().cuda()
-
-        args.num_channels = len(args.num_channels)
-        self.set_common()
+        self.x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
+        self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
 
     def load_data(self, args):
         '''

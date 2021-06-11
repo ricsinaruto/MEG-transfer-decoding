@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 import numpy as np
 from scipy.io import savemat, loadmat
 import torch
@@ -21,6 +22,7 @@ class DondersData:
         self.shift = args.sample_rate - args.timesteps - args.rf + 1
         self.mean = None
         self.var = None
+        self.sub_id = {'train': [], 'val': []}
 
         # load normalization coefficients
         if not args.save_norm:
@@ -31,6 +33,8 @@ class DondersData:
         # load pickled data directly, no further processing required
         if args.load_data:
             self.load_mat_data(args)
+            args.num_channels = len(args.num_channels)
+            self.set_common()
             return
 
         # whether to load an already created PCA model
@@ -84,7 +88,8 @@ class DondersData:
         # create examples from continuous data
         train_eps = []
         val_eps = []
-        for x_train, x_val, discont in zip(x_trains, x_vals, disconts):
+        loop_iter = zip(x_trains, x_vals, disconts)
+        for sid, (x_train, x_val, discont) in enumerate(loop_iter):
             if args.num_components or args.load_pca:
                 # transform and normalize separately
                 x_train = pca_model.transform(x_train.transpose()).transpose()
@@ -98,22 +103,32 @@ class DondersData:
             # create examples by taking into account discontinuities
             val_ln = len(x_val[0])
             val_disconts = [i for i in discont if i < val_ln]
-            val_eps.append(self.create_examples(x_val, val_disconts))
+            examples = self.create_examples(x_val, val_disconts)
+            val_eps.append(examples)
+            self.sub_id['val'].extend([sid] * examples.shape[0])
 
             train_disconts = [0] + [i - val_ln for i in discont if i >= val_ln]
-            train_eps.append(self.create_examples(x_train, train_disconts))
+            examples = self.create_examples(x_train, train_disconts)
+            train_eps.append(examples)
+            self.sub_id['train'].extend([sid] * examples.shape[0])
 
         # concatenate across subjects and shuffle examples
         train_ep = np.concatenate(tuple(train_eps))
         val_ep = np.concatenate(tuple(val_eps))
-        np.random.shuffle(train_ep)
-        np.random.shuffle(val_ep)
+
+        shuffled = list(range(train_ep.shape[0]))
+        random.shuffle(shuffled)
+        self.x_train_t = train_ep[shuffled, :, :]
+        self.sub_id['train'] = np.array(self.sub_id['train'])[shuffled]
+
+        shuffled = list(range(val_ep.shape[0]))
+        random.shuffle(shuffled)
+        self.x_val_t = val_ep[shuffled, :, :]
+        self.sub_id['val'] = np.array(self.sub_id['val'])[shuffled]
+
         print('Good samples: ', sum([x.shape[1] for x in x_trains + x_vals]))
         print('Extracted samples: ',
               (train_ep.shape[0] + val_ep.shape[0]) * self.shift)
-
-        self.x_train_t = torch.Tensor(train_ep).float().cuda()
-        self.x_val_t = torch.Tensor(val_ep).float().cuda()
 
         if not os.path.isdir(os.path.split(args.dump_data)[0]):
             os.mkdir(os.path.split(args.dump_data)[0])
@@ -123,7 +138,9 @@ class DondersData:
             dump = {'x_train': self.x_train[i:i+1, :],
                     'x_val': self.x_val[i:i+1, :],
                     'x_train_t': train_ep[:, i:i+1:, :],
-                    'x_val_t': val_ep[:, i:i+1, :]}
+                    'x_val_t': val_ep[:, i:i+1, :],
+                    'sub_id_train': self.sub_id['train'],
+                    'sub_id_val': self.sub_id['val']}
             savemat(args.dump_data + 'ch' + str(i) + '.mat', dump)
 
         self.set_common()
@@ -136,34 +153,36 @@ class DondersData:
         data = loadmat(args.load_data)
         self.x_train = np.array(data['x_train'])[chn, :]
         self.x_val = np.array(data['x_val'])[chn, :]
-        x_train_t = np.array(data['x_train_t'])[:, chn, :]
-        x_val_t = np.array(data['x_val_t'])[:, chn, :]
-        self.x_train_t = torch.Tensor(x_train_t).float().cuda()
-        self.x_val_t = torch.Tensor(x_val_t).float().cuda()
+        self.x_train_t = np.array(data['x_train_t'])[:, chn, :]
+        self.x_val_t = np.array(data['x_val_t'])[:, chn, :]
 
-        args.num_channels = len(args.num_channels)
-        self.set_common()
-
-    def get_batch(self, i, data):
+    def get_batch(self, i, data, split='train'):
         '''
         Get batch with index i from dataset data.
         '''
         end = data.shape[0] if (i+1)*self.bs > data.shape[0] else (i+1)*self.bs
-        return data[i*self.bs:end, :, :]
+        return data[i*self.bs:end, :, :], self.sub_id[split][i*self.bs:end]
 
     def get_train_batch(self, i):
         # helper for getting a training batch
-        return self.get_batch(i, self.x_train_t)
+        return self.get_batch(i, self.x_train_t, 'train')
 
     def get_val_batch(self, i):
         # helper for getting a validation batch
-        return self.get_batch(i, self.x_val_t)
+        return self.get_batch(i, self.x_val_t, 'val')
 
     def set_common(self):
         # set common parameters
         self.bs = self.args.batch_size
         self.train_batches = int(self.x_train_t.shape[0] / self.bs + 1)
         self.val_batches = int(self.x_val_t.shape[0] / self.bs + 1)
+
+        self.x_train_t = torch.Tensor(self.x_train_t).float().cuda()
+        self.x_val_t = torch.Tensor(self.x_val_t).float().cuda()
+        self.sub_id['train'] = torch.LongTensor(self.sub_id['train']).cuda()
+        self.sub_id['val'] = torch.LongTensor(self.sub_id['val']).cuda()
+        self.sub_id['train'] = self.sub_id['train'].reshape(-1)
+        self.sub_id['val'] = self.sub_id['val'].reshape(-1)
 
     def normalize(self, x, mean=None, var=None):
         '''

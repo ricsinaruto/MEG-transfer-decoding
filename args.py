@@ -10,21 +10,22 @@ from mrc_data import MRCData
 
 
 class Args:
-    gpu = '0'
+    gpu = '1'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
             'train': True,
             'generate': False,
             'recursive': False,
             'analyse_kernels': False,
-            'kernel_network_FIR': True,
+            'kernel_network_FIR': False,
             'kernel_network_IIR': False,
-            'plot_kernels': False}
+            'plot_kernels': False,
+            'feature_importance': False}
 
     def __init__(self):
         # training arguments
         self.learning_rate = 0.0001
-        self.batch_size = 512
+        self.batch_size = 256
         self.epochs = 5000
         self.val_freq = 50
         self.print_freq = 1
@@ -35,18 +36,20 @@ class Args:
         self.result_dir = [os.path.join(
             'results',
             'mrc',
-            '50subjects_ch2_simplewave8ch')]
+            '50subjects_discontfix_sid10_simplewave4ch')]
         self.model = WavenetSimple
         self.dataset = MRCData
 
         # wavenet arguments
         self.activation = torch.asinh
         self.linear = False
+        self.subjects = 50
+        self.embedding_dim = 10
         self.num_samples_CPC = 20
         self.p_drop = 0.0
         self.k_CPC = 1
         self.mu = 255
-        self.ch_mult = 8
+        self.ch_mult = 4
         self.groups = 1
         self.conv1x1_groups = 1
         self.kernel_size = 2
@@ -65,17 +68,17 @@ class Args:
                                  'preproc_nonotch.opt', 'mat_data',
                                  '50subjects')
         self.data_path = [os.path.join(data_path)]
-        self.num_channels = [2]#list(range(128))
+        self.num_channels = list(range(128))
         self.crop = 1
         self.split = 0.2
         self.sr_data = 250
         self.num_components = 128
         self.resample = 7
-        self.save_norm = True
+        self.save_norm = False
         self.norm_path = [os.path.join(data_path, 'norm_coeff')]
         self.pca_path = [os.path.join(data_path, 'pca128_model')]
         self.load_pca = True
-        self.dump_data = [os.path.join(data_path, 'train_data_discontfix', 'train_pca128')]
+        self.dump_data = [os.path.join(data_path, 'train_data_discontfix', 'pca128sid')]
         self.load_data = self.dump_data
 
         # analysis arguments

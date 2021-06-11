@@ -6,7 +6,7 @@ import torch
 import random
 
 from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Identity
-from torch.nn import MSELoss, LogSoftmax, Dropout
+from torch.nn import MSELoss, LogSoftmax, Dropout, Embedding
 from torch.optim import Adam
 import torch.nn.functional as F
 
@@ -37,13 +37,15 @@ class WavenetSimple(Module):
         '''
         Specify the layers of the model.
         '''
-        self.ch = args.ch_mult * args.num_channels
+        inp_ch = args.num_channels + args.embedding_dim
+        self.ch = args.ch_mult * inp_ch
+
         conv1x1_groups = args.conv1x1_groups
         modules = []
 
         # 1x1 convolution to project to hidden channels
         self.first_conv = Conv1d(
-            args.num_channels, self.ch, kernel_size=1, groups=conv1x1_groups)
+            inp_ch, self.ch, kernel_size=1, groups=conv1x1_groups)
 
         # each layer consists of a dilated convolution
         # followed by a nonlinear activation
@@ -61,7 +63,16 @@ class WavenetSimple(Module):
 
         self.cnn_layers = Sequential(*modules)
 
-    def forward(self, x):
+        # subject embeddings
+        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
+
+    def forward(self, x, sid=None):
+        # use subject embeddings if given
+        if self.args.subjects > 0:
+            sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+            sid = self.subject_emb(sid).permute(0, 2, 1)
+            x = torch.cat((x, sid), dim=1)
+
         x = self.first_conv(x)
 
         for layer in self.cnn_layers:
@@ -69,12 +80,13 @@ class WavenetSimple(Module):
 
         return self.last_conv(x), x
 
-    def loss(self, x, i=0, train=True):
+    def loss(self, x, i=0, sid=None, train=True):
         '''
         If timesteps is bigger than 1 this loss can be used to predict any
         timestep in the future directly, e.g. t+2 or t+5, etc.
+        sid: subject index
         '''
-        output, _ = self.forward(x[:, :, :-self.timesteps])
+        output, _ = self.forward(x[:, :, :-self.timesteps], sid)
         target = x[:, :, -output.shape[2]:]
         loss = self.criterion(output, target)
 
