@@ -22,6 +22,7 @@ class WavenetSimple(Module):
     def __init__(self, args):
         super(WavenetSimple, self).__init__()
         self.args = args
+        self.inp_ch = args.num_channels
         self.timesteps = args.timesteps
         self.build_model(args)
 
@@ -37,15 +38,14 @@ class WavenetSimple(Module):
         '''
         Specify the layers of the model.
         '''
-        inp_ch = args.num_channels + args.embedding_dim
-        self.ch = args.ch_mult * inp_ch
+        self.ch = args.ch_mult * self.inp_ch
 
         conv1x1_groups = args.conv1x1_groups
         modules = []
 
         # 1x1 convolution to project to hidden channels
         self.first_conv = Conv1d(
-            inp_ch, self.ch, kernel_size=1, groups=conv1x1_groups)
+            self.inp_ch, self.ch, kernel_size=1, groups=conv1x1_groups)
 
         # each layer consists of a dilated convolution
         # followed by a nonlinear activation
@@ -63,16 +63,7 @@ class WavenetSimple(Module):
 
         self.cnn_layers = Sequential(*modules)
 
-        # subject embeddings
-        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
-
     def forward(self, x, sid=None):
-        # use subject embeddings if given
-        if self.args.subjects > 0:
-            sid = sid.repeat(x.shape[2], 1).permute(1, 0)
-            sid = self.subject_emb(sid).permute(0, 2, 1)
-            x = torch.cat((x, sid), dim=1)
-
         x = self.first_conv(x)
 
         for layer in self.cnn_layers:
@@ -612,6 +603,44 @@ class WavenetSimple(Module):
 
         return triplets
         '''
+
+
+class WavenetSimpleSembConcat(WavenetSimple):
+    '''
+    Implements simplified wavenet with concatenated subject embeddings.
+    '''
+    def build_model(self, args):
+        # subject embeddings
+        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
+
+        self.inp_ch = args.num_channels + args.embedding_dim
+        super(WavenetSimpleSembConcat, self).build_model(args)
+
+    def forward(self, x, sid=None):
+        # concatenate subject embeddings
+        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+        x = torch.cat((x, sid), dim=1)
+
+        return super(WavenetSimpleSembConcat, self).forward(x)
+
+
+class WavenetSimpleSembAdd(WavenetSimple):
+    '''
+    Implements simplified wavenet with added subject embeddings.
+    '''
+    def build_model(self, args):
+        # subject embeddings
+        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
+        super(WavenetSimpleSembAdd, self).build_model(args)
+
+    def forward(self, x, sid=None):
+        # add subject embeddings to input timeseries
+        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+        x = x + sid
+
+        return super(WavenetSimpleSembAdd, self).forward(x)
 
 
 class WavenetMultistep(WavenetSimple):

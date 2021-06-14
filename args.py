@@ -3,14 +3,15 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from wavenets_simple import Conv1PoolNet, ConvPoolNet, WavenetSimple
+from wavenets_simple import Conv1PoolNet, ConvPoolNet
+from wavenets_simple import WavenetSimple, WavenetSimpleSembAdd, WavenetSimpleSembConcat
 from wavenets_full import WavenetFull, WavenetFullSimple
 from simulated_data import EventSimulation, EventSimulationQuantized
 from mrc_data import MRCData
 
 
 class Args:
-    gpu = '1'
+    gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
             'train': True,
@@ -36,15 +37,15 @@ class Args:
         self.result_dir = [os.path.join(
             'results',
             'mrc',
-            '50subjects_discontfix_sid10_simplewave4ch')]
-        self.model = WavenetSimple
+            '50subjects_nonotch_sadd_simplewave4ch')]
+        self.model = WavenetSimpleSembAdd
         self.dataset = MRCData
 
         # wavenet arguments
         self.activation = torch.asinh
         self.linear = False
         self.subjects = 50
-        self.embedding_dim = 10
+        self.embedding_dim = 128
         self.num_samples_CPC = 20
         self.p_drop = 0.0
         self.k_CPC = 1
@@ -74,10 +75,10 @@ class Args:
         self.sr_data = 250
         self.num_components = 128
         self.resample = 7
-        self.save_norm = False
+        self.save_norm = True
         self.norm_path = [os.path.join(data_path, 'norm_coeff')]
         self.pca_path = [os.path.join(data_path, 'pca128_model')]
-        self.load_pca = True
+        self.load_pca = False
         self.dump_data = [os.path.join(data_path, 'train_data_discontfix', 'pca128sid')]
         self.load_data = self.dump_data
 
@@ -90,7 +91,7 @@ class Args:
         self.anal_lr = 0.001
         self.anal_epochs = 200
         self.norm_coeff = 0.0001
-        self.kernel_limit = 300
+        self.kernel_limit = 100
         self.channel_idx = 0
 
         # simulation arguments
