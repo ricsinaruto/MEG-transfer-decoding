@@ -23,6 +23,10 @@ class WavenetSimple(Module):
         super(WavenetSimple, self).__init__()
         self.args = args
         self.inp_ch = args.num_channels
+        # delete
+        #self.inp_ch = args.num_channels + args.embedding_dim
+        # delete
+
         self.timesteps = args.timesteps
         self.build_model(args)
 
@@ -63,7 +67,19 @@ class WavenetSimple(Module):
 
         self.cnn_layers = Sequential(*modules)
 
+        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
+
+    def save_embeddings(self):
+        weights = {'X': self.subject_emb.weight.detach().cpu().numpy()}
+        savemat(os.path.join(self.args.result_dir, 'sub_emb.mat'), weights)
+
     def forward(self, x, sid=None):
+        # delete
+        #sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        #sid = self.subject_emb(sid).permute(0, 2, 1)
+        #x = torch.cat((x, sid), dim=1)
+        # delete
+
         x = self.first_conv(x)
 
         for layer in self.cnn_layers:
@@ -71,7 +87,7 @@ class WavenetSimple(Module):
 
         return self.last_conv(x), x
 
-    def loss(self, x, i=0, sid=None, train=True):
+    def loss(self, x, i=0, sid=None, train=True, criterion=None):
         '''
         If timesteps is bigger than 1 this loss can be used to predict any
         timestep in the future directly, e.g. t+2 or t+5, etc.
@@ -79,7 +95,10 @@ class WavenetSimple(Module):
         '''
         output, _ = self.forward(x[:, :, :-self.timesteps], sid)
         target = x[:, :, -output.shape[2]:]
-        loss = self.criterion(output, target)
+        if criterion is None:
+            loss = self.criterion(output, target)
+        else:
+            loss = criterion(output, target)
 
         return loss, output, target, None
 
@@ -610,9 +629,6 @@ class WavenetSimpleSembConcat(WavenetSimple):
     Implements simplified wavenet with concatenated subject embeddings.
     '''
     def build_model(self, args):
-        # subject embeddings
-        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
-
         self.inp_ch = args.num_channels + args.embedding_dim
         super(WavenetSimpleSembConcat, self).build_model(args)
 
@@ -629,11 +645,6 @@ class WavenetSimpleSembAdd(WavenetSimple):
     '''
     Implements simplified wavenet with added subject embeddings.
     '''
-    def build_model(self, args):
-        # subject embeddings
-        self.subject_emb = Embedding(args.subjects, args.embedding_dim)
-        super(WavenetSimpleSembAdd, self).build_model(args)
-
     def forward(self, x, sid=None):
         # add subject embeddings to input timeseries
         sid = sid.repeat(x.shape[2], 1).permute(1, 0)
@@ -641,6 +652,19 @@ class WavenetSimpleSembAdd(WavenetSimple):
         x = x + sid
 
         return super(WavenetSimpleSembAdd, self).forward(x)
+
+
+class WavenetSimpleSembMult(WavenetSimple):
+    '''
+    Implements simplified wavenet with added subject embeddings.
+    '''
+    def forward(self, x, sid=None):
+        # multiply subject embedding with input
+        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+        x = x * sid
+
+        return super(WavenetSimpleSembMult, self).forward(x)
 
 
 class WavenetMultistep(WavenetSimple):

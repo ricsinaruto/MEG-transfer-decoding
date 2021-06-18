@@ -73,6 +73,9 @@ class Experiment:
 
             for i in range(self.dataset.train_batches):
                 batch, sid = self.dataset.get_train_batch(i)
+                if batch.shape[0] < 1:
+                    break
+
                 loss, _, _, loss2 = self.model.loss(batch, i, sid, train=True)
 
                 loss.backward()
@@ -127,6 +130,53 @@ class Experiment:
 
         loss = self.loss.print('Validation loss: ')
         return loss
+
+    def save_validation(self):
+        '''
+        Evaluate model on the validation dataset for each subject.
+        '''
+        self.model.eval()
+        mse = MSELoss(reduction='none').cuda()
+        losses = []
+
+        for i in range(self.dataset.val_batches):
+            batch, sid = self.dataset.get_val_batch(i)
+            loss, _, _, loss2 = self.model.loss(
+                batch, i, sid, train=False, criterion=mse)
+
+            losses.append((sid, torch.mean(loss, (1, 2)).detach()))
+
+        sid = torch.cat(tuple([loss[0] for loss in losses]))
+        loss = torch.cat(tuple([loss[1] for loss in losses]))
+
+        path = os.path.join(self.args.result_dir, 'val_loss.txt')
+        with open(path, 'w') as f:
+            for i in range(self.args.subjects):
+                sub_loss = torch.mean(loss[sid == i]).item()
+                f.write(str(sub_loss) + '\n')
+
+    def save_validation_channels(self):
+        '''
+        Evaluate model for each channel separately
+        '''
+        self.model.eval()
+        mse = MSELoss(reduction='none').cuda()
+        losses = []
+
+        for i in range(self.dataset.val_batches):
+            batch, sid = self.dataset.get_val_batch(i)
+            loss, _, _, loss2 = self.model.loss(
+                batch, i, sid, train=False, criterion=mse)
+
+            losses.append(torch.mean(loss, (0, 2)).detach())
+
+        loss = torch.stack(tuple(losses))
+        loss = torch.mean(loss, 0)
+
+        path = os.path.join(self.args.result_dir, 'val_loss_ch.txt')
+        with open(path, 'w') as f:
+            for i in range(loss.shape[0]):
+                f.write(str(loss[i].item()) + '\n')
 
     def repeat_baseline(self):
         '''
@@ -201,7 +251,8 @@ class Experiment:
         func = self.AR_uni if self.args.uni else self.AR_multi
         outputs, target, filters = func(x_train, x_val, outputs, target, ts)
 
-        self.AR_analysis(filters)
+        if self.args.do_anal:
+            self.AR_analysis(filters)
 
         outputs = torch.Tensor(outputs).float().cuda()
         target = torch.Tensor(target).float().cuda()
@@ -404,6 +455,25 @@ class Experiment:
     def kernel_network_IIR(self):
         self.model.kernel_network_IIR()
 
+    def save_embeddings(self):
+        if self.args.subjects > 0:
+            self.model.save_embeddings()
+
+    def input_freq(self):
+        figsize = (15, 10*self.args.num_channels)
+        fig, axs = plt.subplots(self.args.num_channels+1, figsize=figsize)
+
+        x_train = self.dataset.x_train
+
+        # loop over all channels
+        for ch in range(x_train.shape[0]):
+            # compute fft of learned input
+            self.model.plot_welch(x_train[ch], axs[ch])
+
+        filename = os.path.join(self.args.result_dir, 'input_freq.svg')
+        fig.savefig(filename, format='svg', dpi=2400)
+        plt.close('all')
+
 
 def main():
     # if list of paths is given, then process everything individually
@@ -420,6 +490,7 @@ def main():
         e = Experiment(args_pass)
 
         if Args.func['repeat_baseline']:
+            e.input_freq()
             e.repeat_baseline()
         if Args.func['AR_baseline']:
             e.AR_baseline()
@@ -439,6 +510,12 @@ def main():
             e.kernel_network_IIR()
         if Args.func['feature_importance']:
             e.feature_importance()
+        if Args.func['save_validation']:
+            e.save_validation()
+        if Args.func['save_validation_ch']:
+            e.save_validation_channels()
+
+        e.save_embeddings()
 
 
 if __name__ == "__main__":
