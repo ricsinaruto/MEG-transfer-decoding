@@ -1,6 +1,7 @@
 scripts/donders_data/*
 scripts/simulated_data/*
 scripts/mrc_data/*
+scripts/cichy_data/*
 data/*
 results/*
 tmp/*

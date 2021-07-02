@@ -11,6 +11,14 @@ freqs = [10 14 18 22 26 33 38 45];
 time_bandwidth = 120;
 bin_width = 3;
 
+%% Subject embedding correlation analysis
+rho = corr(X');
+%imagesc(rho);
+%colormap('jet');
+%colorbar;
+
+[r3, y] = reord(rho, 2, 'true');
+
 %% Apply forward filter
 X = ft_preproc_bandpassfilter(...
     X, fs, band_pass, 5, 'but', 'onepass', 'reduce');
@@ -20,7 +28,7 @@ save(strcat('simulated/8event_snr1/filtered125hz.mat'), 'X')
 
 %% Plot wavelet and welch spectra of timeseries
 figure;
-cwt(X(1, 25000:35000), fs, 'TimeBandwidth', time_bandwidth);
+cwt(X(1, 25000:34000), fs, 'TimeBandwidth', time_bandwidth);
 for i = 1:size(freqs, 2)
     yline(freqs(i), 'white');
 end
