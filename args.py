@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from wavenets_simple import Conv1PoolNet, ConvPoolNet
+from wavenets_simple import Conv1PoolNet, ConvPoolNet, WavenetSimplePCA
 from wavenets_simple import WavenetSimple, WavenetSimpleSembAdd, WavenetSimpleSembMult
 from wavenets_full import WavenetFull, WavenetFullSimple
 from simulated_data import EventSimulation, EventSimulationQuantized
@@ -11,7 +11,7 @@ from mrc_data import MRCData
 
 
 class Args:
-    gpu = '0'
+    gpu = '1'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
             'train': True,
@@ -23,24 +23,26 @@ class Args:
             'plot_kernels': False,
             'feature_importance': False,
             'save_validation_ch': False,
-            'save_validation': False}
+            'save_validation_subs': False,
+            'pca_sensor_loss': False}
 
     def __init__(self):
         # training arguments
-        self.learning_rate = 0.0001
-        self.batch_size = 8
-        self.epochs = 300
-        self.val_freq = 20
+        self.name = 'args_q.py'
+        self.learning_rate = 0.00001
+        self.batch_size = 64
+        self.epochs = 1000
+        self.val_freq = 50
         self.print_freq = 1
         self.num_plot = 1
         self.plot_ch = 1
         self.save_curves = True
-        self.load_model = False
+        self.load_model = [False]
         self.result_dir = [os.path.join(
             'results',
             'mrc',
-            'subject50_indiv_nonotch_simplewave4ch')]
-        self.model = WavenetSimple
+            '60subjects_notch_sensors_simplewavepca16ch')]
+        self.model = WavenetSimplePCA
         self.dataset = MRCData
 
         # wavenet arguments
@@ -52,7 +54,8 @@ class Args:
         self.p_drop = 0.0
         self.k_CPC = 1
         self.mu = 255
-        self.ch_mult = 2
+        self.ch_mult = 16
+        self.red_channels = 128
         self.groups = 1
         self.conv1x1_groups = 1
         self.kernel_size = 2
@@ -68,9 +71,9 @@ class Args:
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
                                  'mrc_meguk', 'elekta_eo',
-                                 'preproc_nonotch.opt', 'mat_data',
-                                 '50subjects')
-        self.data_path = [os.path.join(data_path, 'subject50.mat')]
+                                 'preproc_notch.opt', 'mat_data',
+                                 '60subjects')
+        self.data_path = [os.path.join(data_path)]
         self.num_channels = list(range(306))
         self.crop = 1
         self.split = 0.2
@@ -81,8 +84,8 @@ class Args:
         self.norm_path = [os.path.join(data_path, 'norm_coeff')]
         self.pca_path = [os.path.join(data_path, 'pca128_model')]
         self.load_pca = False
-        self.dump_data = [os.path.join(data_path, 'temp', 't')]
-        self.load_data = ['']#self.dump_data
+        self.dump_data = [os.path.join(data_path, 'train_data_sensor', 'c')]
+        self.load_data = self.dump_data
 
         # analysis arguments
         self.generate_noise = 1
@@ -115,9 +118,6 @@ class Args:
         # AR model arguments
         self.order = 64
         self.uni = True
-        self.save_AR = False
-        self.do_anal = False
-        self.AR_load_path = [os.path.join(
-            'results',
-            'mrc',
-            '50subjects_nonotch_sensors_uniAR64')] * 50
+        self.save_AR = True
+        self.do_anal = True
+        self.AR_load_path = self.result_dir

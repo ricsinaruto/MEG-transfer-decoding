@@ -1,6 +1,7 @@
 import os
 import copy
 import torch
+import mat73
 import numpy as np
 from scipy.io import loadmat
 
@@ -54,10 +55,19 @@ class MRCData(DondersData):
         disconts = []
         for path in paths:
             print(path)
-            dat = loadmat(path)
+            try:
+                dat = loadmat(path)
+            except NotImplementedError:
+                dat = mat73.loadmat(path)
 
             # discontinuous segment lengths are saved in T
-            d = np.array(dat['T'])[0].astype(int)
+            T = np.array(dat['T'])
+            try:
+                _ = T.shape[1]
+                d = T[0].astype(int)
+            except:
+                d = T.astype(int)
+
             try:
                 _ = len(d)
             except TypeError as e:

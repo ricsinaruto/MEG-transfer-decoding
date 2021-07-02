@@ -1,4 +1,5 @@
 import os
+import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import sails
@@ -12,12 +13,7 @@ from scipy.io import savemat
 from torch.nn import MSELoss
 from torch.optim import Adam
 
-
-from args import Args
 from loss import Loss
-
-os.environ["NVIDIA_VISIBLE_DEVICES"] = Args.gpu
-os.environ["CUDA_VISIBLE_DEVICES"] = Args.gpu
 
 
 class Experiment:
@@ -35,18 +31,20 @@ class Experiment:
 
         # save args
         path = os.path.join(self.args.result_dir, 'args_saved.py')
-        os.system('cp args.py ' + path)
+        os.system('cp ' + args.name + ' ' + path)
 
         # initialize dataset
         self.dataset = self.args.dataset(self.args)
 
         # load model if path is specified
-        self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-        if self.args.load_model:
+        if args.load_model:
+            self.model_path = os.path.join(args.load_model, 'model.pt')
             self.model = torch.load(self.model_path)
-            self.args.dataset = self.dataset
+            #self.args.dataset = self.dataset
             self.model.args = self.args
+            #torch.save(self.model, self.model_path, pickle_protocol=4)
         else:
+            self.model_path = os.path.join(self.args.result_dir, 'model.pt')
             self.model = self.args.model(self.args).cuda()
 
         # initialize optimizer
@@ -62,6 +60,7 @@ class Experiment:
         Main training loop over epochs and training batches.
         '''
         best_val = 1000000
+        self.evaluate()
 
         for epoch in range(self.args.epochs):
             self.model.train()
@@ -132,6 +131,13 @@ class Experiment:
         return loss
 
     def save_validation(self):
+        loss = self.evaluate()
+
+        path = os.path.join(self.args.result_dir, 'val_loss.txt')
+        with open(path, 'w') as f:
+            f.write(str(loss))
+
+    def save_validation_subs(self):
         '''
         Evaluate model on the validation dataset for each subject.
         '''
@@ -144,7 +150,8 @@ class Experiment:
             loss, _, _, loss2 = self.model.loss(
                 batch, i, sid, train=False, criterion=mse)
 
-            losses.append((sid, torch.mean(loss, (1, 2)).detach()))
+            loss = torch.mean(loss, (1, 2)).detach()
+            losses.append((sid, loss))
 
         sid = torch.cat(tuple([loss[0] for loss in losses]))
         loss = torch.cat(tuple([loss[1] for loss in losses]))
@@ -162,28 +169,78 @@ class Experiment:
         self.model.eval()
         mse = MSELoss(reduction='none').cuda()
         losses = []
+        outputs = []
 
         for i in range(self.dataset.val_batches):
             batch, sid = self.dataset.get_val_batch(i)
-            loss, _, _, loss2 = self.model.loss(
+            loss, output, _, loss2 = self.model.loss(
                 batch, i, sid, train=False, criterion=mse)
 
-            losses.append(torch.mean(loss, (0, 2)).detach())
+            losses.append(torch.mean(loss.detach(), (0, 2)))
+            outputs.append(output.detach())
 
-        loss = torch.stack(tuple(losses))
-        loss = torch.mean(loss, 0)
+        loss = torch.mean(torch.stack(tuple(losses)), 0)
+        one_loss = torch.mean(loss)
+
+        outputs = torch.cat(tuple(outputs)).permute(1, 0, 2)
+        outputs = outputs.reshape(outputs.shape[0], -1)
+        var = torch.std(outputs, 1)
+        one_var = torch.std(torch.flatten(outputs))
+
+        path = os.path.join(self.args.result_dir, 'val_loss_var.txt')
+        with open(path, 'w') as f:
+            f.write(str(one_loss.item()) + '\t' + str(one_var.item()))
 
         path = os.path.join(self.args.result_dir, 'val_loss_ch.txt')
         with open(path, 'w') as f:
             for i in range(loss.shape[0]):
-                f.write(str(loss[i].item()) + '\n')
+                f.write(str(loss[i].item()) + '\t' + str(var[i].item()))
+                f.write('\n')
+
+    def pca_sensor_loss(self):
+        '''
+        Evaluate model for each channel separately
+        '''
+        self.model.eval()
+        self.loss.list = []
+        mse = MSELoss().cuda()
+
+        self.args.num_channels = list(range(128))
+        self.args.load_data = self.args.load_data2
+        self.pca_data = self.args.dataset(self.args)
+        outputs = []
+        targets = []
+
+        for i in range(self.dataset.val_batches):
+            batch, _ = self.dataset.get_val_batch(i)
+            batch_pca, _ = self.pca_data.get_val_batch(i)
+            loss, output, target, loss2 = self.model.loss(
+                batch_pca, i, _, train=False)
+
+            self.loss.append(loss, loss2)
+
+            outputs.append(output.detach())
+            targets.append(batch[:, :, -output.shape[2]:])
+
+        self.loss.print('Validation loss: ')
+
+        outputs = torch.cat(tuple(outputs)).permute(0, 2, 1)
+        outputs = outputs.reshape(-1, outputs.shape[2]).cpu().numpy()
+        outputs = self.dataset.pca_model.inverse_transform(outputs)
+        outputs = torch.Tensor(outputs).cuda()
+
+        targets = torch.cat(tuple(targets)).permute(0, 2, 1)
+        targets = targets.reshape(-1, outputs.shape[1])
+
+        loss = mse(outputs, targets)
+        print(loss.item())
 
     def repeat_baseline(self):
         '''
         Simple baseline that repeats current timestep as prediction for next.
         '''
         for i in range(self.dataset.val_batches):
-            batch = self.dataset.get_val_batch(i)
+            batch, sid = self.dataset.get_val_batch(i)
             self.loss.append(self.model.repeat_loss(batch))
 
         self.loss.print('Repeat baseline loss: ')
@@ -475,9 +532,9 @@ class Experiment:
         plt.close('all')
 
 
-def main():
-    # if list of paths is given, then process everything individually
+def main(Args):
     args = Args()
+    # if list of paths is given, then process everything individually
     for i, d_path in enumerate(args.data_path):
         args_pass = Args()
         args_pass.data_path = d_path
@@ -487,6 +544,13 @@ def main():
         args_pass.norm_path = args.norm_path[i]
         args_pass.pca_path = args.pca_path[i]
         args_pass.AR_load_path = args.AR_load_path[i]
+        args_pass.load_model = args.load_model[i]
+
+        # skip if subject does not exist
+        if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
+            print('Skipping ' + d_path)
+            continue
+
         e = Experiment(args_pass)
 
         if Args.func['repeat_baseline']:
@@ -510,13 +574,17 @@ def main():
             e.kernel_network_IIR()
         if Args.func['feature_importance']:
             e.feature_importance()
-        if Args.func['save_validation']:
-            e.save_validation()
+        if Args.func['save_validation_subs']:
+            e.save_validation_subs()
         if Args.func['save_validation_ch']:
             e.save_validation_channels()
+        if Args.func['pca_sensor_loss']:
+            e.pca_sensor_loss()
 
         e.save_embeddings()
 
 
+'''
 if __name__ == "__main__":
     main()
+'''

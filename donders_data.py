@@ -30,16 +30,17 @@ class DondersData:
             self.mean = norm['means']
             self.var = norm['vars']
 
+        # whether to load an already created PCA model
+        if args.load_pca:
+            pca_model = pickle.load(open(args.pca_path, 'rb'))
+            self.pca_model = pca_model
+
         # load pickled data directly, no further processing required
         if args.load_data:
             self.load_mat_data(args)
             args.num_channels = len(args.num_channels)
             self.set_common()
             return
-
-        # whether to load an already created PCA model
-        if args.load_pca:
-            pca_model = pickle.load(open(args.pca_path, 'rb'))
 
         # load the raw subject data
         x_trains, x_vals, disconts = self.load_data(args)
@@ -137,8 +138,8 @@ class DondersData:
         for i in range(args.num_channels):
             dump = {'x_train': self.x_train[i:i+1, :],
                     'x_val': self.x_val[i:i+1, :],
-                    'x_train_t': train_ep[:, i:i+1:, :],
-                    'x_val_t': val_ep[:, i:i+1, :],
+                    'x_train_t': self.x_train_t[:, i:i+1:, :],
+                    'x_val_t': self.x_val_t[:, i:i+1, :],
                     'sub_id_train': self.sub_id['train'],
                     'sub_id_val': self.sub_id['val']}
             savemat(args.dump_data + 'ch' + str(i) + '.mat', dump)
@@ -268,6 +269,6 @@ class DondersData:
             x_epochs.extend(samples)
 
         x_epochs = np.array(x_epochs)
-        np.random.shuffle(x_epochs)
+        #np.random.shuffle(x_epochs)
 
         return x_epochs

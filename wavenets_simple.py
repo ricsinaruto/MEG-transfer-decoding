@@ -6,7 +6,7 @@ import torch
 import random
 
 from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Identity
-from torch.nn import MSELoss, LogSoftmax, Dropout, Embedding
+from torch.nn import MSELoss, LogSoftmax, Dropout, Embedding, Linear
 from torch.optim import Adam
 import torch.nn.functional as F
 
@@ -63,7 +63,7 @@ class WavenetSimple(Module):
 
         # 1x1 convolution to go back to original channel dimension
         self.last_conv = Conv1d(
-            self.ch, args.num_channels, kernel_size=1, groups=conv1x1_groups)
+            self.ch, self.inp_ch, kernel_size=1, groups=conv1x1_groups)
 
         self.cnn_layers = Sequential(*modules)
 
@@ -445,7 +445,7 @@ class WavenetSimple(Module):
             all_kernels.append(kernels)
             kernels = kernels.reshape(-1, ks)
 
-            num_plots = kernels.shape[0]+1
+            num_plots = min(kernels.shape[0]+1, self.args.kernel_limit)
             fig, axs = plt.subplots(num_plots, figsize=(5, num_plots*3))
             fig_freq, axs_freq = plt.subplots(num_plots,
                                               figsize=(20, num_plots*3))
@@ -622,6 +622,22 @@ class WavenetSimple(Module):
 
         return triplets
         '''
+
+
+class WavenetSimplePCA(WavenetSimple):
+    def build_model(self, args):
+        self.encoder = Linear(self.inp_ch, args.red_channels, bias=False)
+        self.decoder = Linear(args.red_channels, self.inp_ch, bias=False)
+
+        self.inp_ch = args.red_channels
+        super(WavenetSimplePCA, self).build_model(args)
+
+    def forward(self, x, sid=None):
+        x = self.encoder(x.permute(0, 2, 1)).permute(0, 2, 1)
+        out, x = super(WavenetSimplePCA, self).forward(x)
+
+        out = self.decoder(out.permute(0, 2, 1)).permute(0, 2, 1)
+        return out, None
 
 
 class WavenetSimpleSembConcat(WavenetSimple):
