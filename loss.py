@@ -15,9 +15,9 @@ class Loss:
         loss = sum(self.list)/len(self.list)
         if self.list2:
             loss2 = sum(self.list2)/len(self.list2)
-            print(message, loss, ' ', loss2)
+            print(message, loss, ' ', loss2, flush=True)
         else:
-            print(message, loss)
+            print(message, loss, flush=True)
 
         self.list = []
         self.list2 = []

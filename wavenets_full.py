@@ -55,7 +55,7 @@ class WavenetFull(WavenetSimple):
 
         self.dropout = Dropout(args.p_drop)
 
-    def forward(self, x):
+    def forward(self, x, sid=None):
         x = self.first_conv(x)
         skips = []
 

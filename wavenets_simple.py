@@ -4,9 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import random
+import pickle
 
 from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Identity
-from torch.nn import MSELoss, LogSoftmax, Dropout, Embedding, Linear
+from torch.nn import MSELoss, LogSoftmax, Dropout, Dropout2d, Embedding, Linear
 from torch.optim import Adam
 import torch.nn.functional as F
 
@@ -23,6 +24,7 @@ class WavenetSimple(Module):
         super(WavenetSimple, self).__init__()
         self.args = args
         self.inp_ch = args.num_channels
+        self.out_ch = args.num_channels
         # delete
         #self.inp_ch = args.num_channels + args.embedding_dim
         # delete
@@ -36,13 +38,13 @@ class WavenetSimple(Module):
             self.activation = Identity()
 
         # add dropout to each layer
-        self.dropout = Dropout(args.p_drop)
+        self.dropout = Dropout2d(args.p_drop)
 
     def build_model(self, args):
         '''
         Specify the layers of the model.
         '''
-        self.ch = args.ch_mult * self.inp_ch
+        self.ch = int(args.ch_mult * self.inp_ch)
 
         conv1x1_groups = args.conv1x1_groups
         modules = []
@@ -63,7 +65,7 @@ class WavenetSimple(Module):
 
         # 1x1 convolution to go back to original channel dimension
         self.last_conv = Conv1d(
-            self.ch, self.inp_ch, kernel_size=1, groups=conv1x1_groups)
+            self.ch, self.out_ch, kernel_size=1, groups=conv1x1_groups)
 
         self.cnn_layers = Sequential(*modules)
 
@@ -73,13 +75,23 @@ class WavenetSimple(Module):
         weights = {'X': self.subject_emb.weight.detach().cpu().numpy()}
         savemat(os.path.join(self.args.result_dir, 'sub_emb.mat'), weights)
 
-    def forward(self, x, sid=None):
+    def forward3(self, x, sid=None):
         # delete
         #sid = sid.repeat(x.shape[2], 1).permute(1, 0)
         #sid = self.subject_emb(sid).permute(0, 2, 1)
         #x = torch.cat((x, sid), dim=1)
         # delete
 
+        x = self.first_conv(x)
+
+        for i, layer in enumerate(self.cnn_layers):
+            x = self.activation(self.dropout(layer(x)))
+            if i == len(self.cnn_layers) - 3:
+                class_out = x
+
+        return self.last_conv(x), class_out
+
+    def forward(self, x, sid=None):
         x = self.first_conv(x)
 
         for layer in self.cnn_layers:
@@ -624,6 +636,91 @@ class WavenetSimple(Module):
         '''
 
 
+class WavenetSimpleShared(WavenetSimple):
+    '''
+    WavenetSimple but the same model for each sensor.
+    '''
+    def __init__(self, args):
+        super(WavenetSimpleShared, self).__init__(args)
+        self.inp_ch = 1
+        self.out_ch = 1
+        self.build_model(args)
+
+    def forward(self, x, sid=None):
+        bs = x.shape[0]
+        chn = x.shape[1]
+        x = x.reshape(-1, 1, x.shape[2])
+        out, x = super(WavenetSimpleShared, self).forward(x)
+
+        return out.reshape(bs, chn, -1), x.reshape(bs, chn, -1, x.shape[2])
+
+
+class WavenetSimpleChannelUp(WavenetSimple):
+    def build_model(self, args):
+        '''
+        Specify the layers of the model.
+        '''
+        modules = []
+        self.ch = int(args.ch_mult * self.inp_ch)
+        self.first_conv = Conv1d(
+            self.inp_ch, self.ch, kernel_size=1, groups=1)
+
+        for i, rate in enumerate(args.dilations):
+            modules.append(Conv1d(self.ch,
+                                  int(1.5*self.ch),
+                                  kernel_size=args.kernel_size,
+                                  dilation=rate,
+                                  groups=args.groups))
+            self.ch = int(1.5*self.ch)
+
+        # 1x1 convolution to go back to original channel dimension
+        self.last_conv = Conv1d(
+            self.ch, self.out_ch, kernel_size=1, groups=1)
+
+        self.cnn_layers = Sequential(*modules)
+
+
+class WavenetSimpleSTS(WavenetSimple):
+    '''
+    Wavenet with 3 consecutive blocks: Spatial -> Temporal -> Spatial
+    '''
+
+    def build_model(self, args):
+        '''
+        Specify the layers of the model.
+        '''
+        self.ch = args.ch_mult * self.inp_ch
+        self.spatial_conv1 = Conv1d(
+            self.inp_ch, self.ch, kernel_size=1, groups=1)
+        self.spatial_conv2 = Conv1d(
+            self.ch, self.ch, kernel_size=1, groups=1)
+
+        self.spatial_conv3 = Conv1d(
+            self.ch, self.ch, kernel_size=1, groups=1)
+        self.spatial_conv4 = Conv1d(
+            self.ch, self.out_ch, kernel_size=1, groups=1)
+
+        self.inp_ch = 1
+        self.out_ch = 1
+        super(WavenetSimpleSTS, self).build_model(args)
+
+    def forward(self, x, sid=None):
+        bs = x.shape[0]
+        x = self.activation(self.dropout(self.spatial_conv1(x)))
+        x = self.activation(self.dropout(self.spatial_conv2(x)))
+        x = x.reshape(bs, -1, int(self.ch/self.inp_ch), x.shape[2])
+        x = x.reshape(-1, x.shape[2], x.shape[3])
+
+        for layer in self.cnn_layers:
+            x = self.activation(self.dropout(layer(x)))
+
+        x = x.reshape(bs, -1, x.shape[1], x.shape[2])
+        x = x.reshape(x.shape[0], -1, x.shape[3])
+        x = self.activation(self.dropout(self.spatial_conv3(x)))
+
+        return self.spatial_conv4(x), x
+
+
 class WavenetSimplePCA(WavenetSimple):
     def build_model(self, args):
         self.encoder = Linear(self.inp_ch, args.red_channels, bias=False)
@@ -638,6 +735,21 @@ class WavenetSimplePCA(WavenetSimple):
 
         out = self.decoder(out.permute(0, 2, 1)).permute(0, 2, 1)
         return out, None
+
+
+class WavenetSimplePCAfixed(WavenetSimple):
+    def build_model(self, args):
+        pca_model = pickle.load(open(args.pca_path, 'rb'))
+        self.encoder = Linear(self.inp_ch, args.red_channels, bias=False)
+        self.decoder = Linear(args.red_channels, self.inp_ch, bias=False)
+
+        self.encoder.weight = torch.Tensor(pca_model.components_.T)
+        self.decoder.weight = torch.Tensor(pca_model.components_)
+        self.encoder.weight.requires_grad = False
+        self.decoder.weight.requires_grad = False
+
+        self.inp_ch = args.red_channels
+        super(WavenetSimplePCAfixed, self).build_model(args)
 
 
 class WavenetSimpleSembConcat(WavenetSimple):

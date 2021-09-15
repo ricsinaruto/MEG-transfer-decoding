@@ -1,102 +1,171 @@
+import os
+import random
 import numpy as np
-from sklearn.decomposition import PCA
-from mne.decoding import UnsupervisedSpatialFilter
-import pickle
-import torch
+from scipy.io import loadmat, savemat
+from scipy.signal import butter, filtfilt
 
-from donders_data import DondersData
+from mrc_data import MRCData
 
 
-class CichyData(DondersData):
-    def __init__(self, args):
-        self.args = args
+class CichyData(MRCData):
+    '''
+    Class for loading the trials from the Cichy dataset.
+    '''
+    def filter(self, x):
+        b, a = butter(5, [0.1, 124.99], 'bandpass', fs=1000)
+        x = filtfilt(b, a, x)
 
-        trials = 30
-        x, y, num_examples, trial_list = self.load_data()
+        b, a = butter(5, [49.8, 50.2], 'bandstop', fs=1000)
+        x = filtfilt(b, a, x)
 
-        print(x.shape)
-        x = x[:, :args.num_channels, :]
-        x = self._normalize(x, args.num_channels)
+        b, a = butter(5, [99.7, 100.3], 'bandstop', fs=1000)
+        x = filtfilt(b, a, x)
 
-        # print('Max value', np.max(np.abs(x_train)))
-
-        y = [y for _ in range(args.sample_rate)]
-        y = np.array(y).transpose()
-
-        low = int(trials * args.split)
-        high = int(2*trials * args.split)
-        cl = list(range(args.num_classes))
-
-        x_val = [x[low+trials*i:high+trials*i] for i in cl]
-        x_train = [x[:low]] + [x[high+trials*i:low+trials*(i+1)] for i in cl]
-
-        x_val = np.concatenate(*x_val)
-        x_train = np.concatenate(*x_train)
-        perm_val = np.random.permutation(len(self.x_val))
-        perm_train = np.random.permutation(len(self.x_train))
-
-        self.x_val_t = torch.Tensor(x_val[perm_val]).float().cuda()
-        self.x_train_t = torch.Tensor(x_train[perm_train]).float().cuda()
-        self.x_val = x_val.transpose(1, 0, 2).reshape(args.num_channels, -1)
-        self.x_train = x_train.transpose(1, 0, 2).reshape(args.num_channels, -1)
-
-        y_val = [y[low+trials*i:high+trials*i] for i in cl]
-        y_train = [y[:low]] + [y[high+trials*i:low+trials*(i+1)] for i in cl]
-        self.y_val = torch.tensor(np.concatenate(*y_val)[perm_val],
-                                  dtype=torch.long).cuda()
-        self.y_train = torch.tensor(np.concatenate(*y_train)[perm_train],
-                                    dtype=torch.long).cuda()
-
-        self.set_common()
-
-    def _normalize(self, x, channels):
-        x = x.transpose(1, 0, 2).reshape(channels, -1)
-        x = self.normalize(x)
-        x = x.reshape(channels, -1, self.args.sample_rate).transpose(1, 0, 2)
+        b, a = butter(5, [149.6, 150.4], 'bandstop', fs=1000)
+        x = filtfilt(b, a, x)
 
         return x
 
-    def load_data(self,
-                  permute=False,
-                  trials=30,
-                  tmin=0):
+    def normalize(self, x, mean=None, var=None):
+        '''
+        Normalize along channels, by concatenating all trials.
+        '''
+        channels = x.shape[2]
+        x = x.transpose(0, 1, 3, 2).reshape(-1, channels).transpose(1, 0)
+        x, mean, var = super(CichyData, self).normalize(x, mean, var)
 
-        tmax = self.args.resample + self.args.sample_rate
-        if not self.args.load_pca:
-            data = pickle.load(open(self.args.data_path, 'rb'))
-            data = data[:self.args.num_classes*trials, :, tmin:tmax]
-            data = data[:, :, ::self.args.resample]
+        return x, mean, var
 
-            channels = data.shape[1]
+    def load_mat_data(self, args):
+        '''
+        Loads ready-to-train splits from mat files.
+        '''
+        chn = args.num_channels
+        args.num_channels = args.num_channels[:-1]
+        x_train_ts = []
+        x_val_ts = []
+
+        # load data for each channel
+        for index, i in enumerate(chn):
+            data = loadmat(args.load_data + 'ch' + str(i) + '.mat')
+            x_train_ts.append(np.array(data['x_train_t']))
+            x_val_ts.append(np.array(data['x_val_t']))
+
+            if index == 0:
+                self.sub_id['train'] = np.array(data['sub_id_train'])
+                self.sub_id['val'] = np.array(data['sub_id_val'])
+
+        self.x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
+        self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
+
+        # crop data according to receptive field
+        self.x_train_t = self.x_train_t[:, :, :args.sample_rate]
+        self.x_val_t = self.x_val_t[:, :, :args.sample_rate]
+
+        print(self.x_train_t.shape[0])
+        print(self.x_val_t.shape[0])
+
+        # shuffle labels
+        #self.x_train_t[:, -1, 0] = np.random.randint(0, 118, (self.x_train_t.shape[0],))
+
+    def save_data(self):
+        '''
+        Save final data to disk for easier loading next time.
+        '''
+        for i in range(self.x_train_t.shape[1]):
+            dump = {'x_train_t': self.x_train_t[:, i:i+1:, :],
+                    'x_val_t': self.x_val_t[:, i:i+1, :],
+                    'sub_id_train': self.sub_id['train'],
+                    'sub_id_val': self.sub_id['val']}
+            savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
+
+    def load_data(self, args):
+        '''
+        Load trials for each condition from multiple subjects.
+        '''
+        # whether we are working with one subject or a directory of them
+        if 'sub' in args.data_path:
+            paths = [args.data_path]
         else:
-            data = pickle.load(open(self.args.data_path, 'rb'))
+            paths = os.listdir(args.data_path)
+            paths = [os.path.join(args.data_path, p) for p in paths]
+            paths = [p for p in paths if os.path.isdir(p)]
+            paths = [p for p in paths if 'opt' not in p]
 
-        # sanity check
+        x_trains = []
+        x_vals = []
+        disconts = []
+        for path in paths:
+            # store condition with lowest number of trials
+            min_trials = 100
+            dataset = []
+            # loop over 118 conditions
+            for c in range(0, 118):
+                cond_path = os.path.join(path, 'cond' + str(c))
+                files = os.listdir(cond_path)
+                if len(files) < min_trials:
+                    min_trials = len(files)
+
+                trials = []
+                for f in files:
+                    #trial = loadmat(os.path.join(cond_path, f))
+                    #trials.append(np.array(trial['F']))
+                    trial = np.load(os.path.join(cond_path, f))
+                    trials.append(trial)
+
+                dataset.append(np.array(trials))
+
+            print('Minimum trials: ', min_trials)
+            # dataset shape: conditions x trials x channels x timesteps
+            dataset = np.array([t[:min_trials, :, :] for t in dataset])
+
+            # choose first 306 channels and downsample
+            dataset = dataset.transpose(0, 1, 3, 2)
+            dataset = dataset[:, :, args.num_channels, :]
+            self.timesteps = dataset.shape[3]
+
+            #dataset = self.filter(dataset)
+
+            # shuffle trials
+            shuffled = list(range(min_trials))
+            random.shuffle(shuffled)
+            dataset = dataset[:, shuffled, :, :]
+
+            # create training and validation splits with equal class numbers
+            split = int(args.split * min_trials)
+            x_val = dataset[:, :split, :, :]
+            x_train = dataset[:, split:, :, :]
+
+            x_train, mean, var = self.normalize(x_train)
+            x_val, _, _ = self.normalize(x_val, mean, var)
+
+            x_trains.append(x_train)
+            x_vals.append(x_val)
+            disconts.append([0])
+
+        args.num_channels = len(args.num_channels)
+        return x_trains, x_vals, disconts
+
+    def create_examples(self, x, disconts):
         '''
-        for i in range(10):
-            plt.plot(data[0, i, :])
-        plt.savefig(
-            os.path.join('results', 'channels.svg'), format='svg', dpi=1200)
-        plt.close('all')
+        Create examples with labels.
         '''
+        x = x.transpose(1, 0)
+        x = x.reshape(118, -1, self.timesteps, x.shape[1])
+        x = x.transpose(0, 1, 3, 2)
 
-        if self.args.num_components and not self.args.load_pca:
-            # normalize
-            data = self._normalize(data, channels)
+        resample = int(1000/self.args.sr_data)
+        x = x[:, :, :, ::resample]
+        timesteps = x.shape[3]
+        trials = x.shape[1]
 
-            pca_model = PCA(n_components=self.args.num_components,
-                            random_state=69)
-            pca = UnsupervisedSpatialFilter(pca_model, average=False)
-            data = pca.fit_transform(data)
+        array = []
+        labels = np.ones((trials, 1, timesteps))
+        for c in range(x.shape[0]):
+            array.append(np.concatenate((x[c, :, :, :], labels * c), axis=1))
 
-            path = self.args.data_path + '_pca' + str(self.args.num_components)
-            pickle.dump(data, open(path, 'wb'))
-
-        ones = [np.ones(trials, dtype=np.int32)*i
-                for i in range(self.args.num_classes)]
-        y_train = np.concatenate((ones))
-
-        return data, y_train
+        x = np.array(array).reshape(-1, x.shape[2] + 1, timesteps)
+        return x
 
 
 class CichyDataAttention(CichyData):

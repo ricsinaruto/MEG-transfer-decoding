@@ -134,17 +134,21 @@ class DondersData:
         if not os.path.isdir(os.path.split(args.dump_data)[0]):
             os.mkdir(os.path.split(args.dump_data)[0])
 
-        # save final data to disk for easier loading next time
-        for i in range(args.num_channels):
+        self.save_data()
+        self.set_common()
+
+    def save_data(self):
+        '''
+        Save final data to disk for easier loading next time.
+        '''
+        for i in range(self.x_train.shape[0]):
             dump = {'x_train': self.x_train[i:i+1, :],
                     'x_val': self.x_val[i:i+1, :],
                     'x_train_t': self.x_train_t[:, i:i+1:, :],
                     'x_val_t': self.x_val_t[:, i:i+1, :],
                     'sub_id_train': self.sub_id['train'],
                     'sub_id_val': self.sub_id['val']}
-            savemat(args.dump_data + 'ch' + str(i) + '.mat', dump)
-
-        self.set_common()
+            savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
 
     def load_mat_data(self, args):
         '''

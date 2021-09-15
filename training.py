@@ -40,9 +40,11 @@ class Experiment:
         if args.load_model:
             self.model_path = os.path.join(args.load_model, 'model.pt')
             self.model = torch.load(self.model_path)
+            self.model_path = os.path.join(self.args.result_dir, 'model.pt')
             #self.args.dataset = self.dataset
-            self.model.args = self.args
             #torch.save(self.model, self.model_path, pickle_protocol=4)
+            self.model.loaded(args)
+            self.model.cuda()
         else:
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
             self.model = self.args.model(self.args).cuda()
@@ -53,7 +55,7 @@ class Experiment:
 
         # calculate number of total parameters in model
         parameters = [param.numel() for param in self.model.parameters()]
-        print('Number of parameters: ', sum(parameters))
+        print('Number of parameters: ', sum(parameters), flush=True)
 
     def train(self):
         '''
@@ -97,6 +99,7 @@ class Experiment:
                 if self.args.save_curves:
                     self.save_curves()
 
+        self.model.end()
         self.evaluate()
 
     def save_curves(self):
@@ -548,7 +551,7 @@ def main(Args):
 
         # skip if subject does not exist
         if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
-            print('Skipping ' + d_path)
+            print('Skipping ' + d_path, flush=True)
             continue
 
         e = Experiment(args_pass)

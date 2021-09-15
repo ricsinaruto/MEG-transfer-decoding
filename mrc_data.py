@@ -9,6 +9,9 @@ from donders_data import DondersData
 
 
 class MRCData(DondersData):
+    '''
+    Class for loading and processing resting state data from the MRC dataset.
+    '''
     def load_mat_data(self, args):
         '''
         Loads ready-to-train splits from mat files.
@@ -55,31 +58,36 @@ class MRCData(DondersData):
         disconts = []
         for path in paths:
             print(path)
-            try:
-                dat = loadmat(path)
-            except NotImplementedError:
-                dat = mat73.loadmat(path)
-
-            # discontinuous segment lengths are saved in T
-            T = np.array(dat['T'])
-            try:
-                _ = T.shape[1]
-                d = T[0].astype(int)
-            except:
-                d = T.astype(int)
-
-            try:
-                _ = len(d)
-            except TypeError as e:
+            if args.numpy:
+                x_train = np.load(path).T
                 d = np.array([0])
-                print(str(e))
+            else:
+                try:
+                    dat = loadmat(path)
+                except NotImplementedError:
+                    dat = mat73.loadmat(path)
+
+                # discontinuous segment lengths are saved in T
+                T = np.array(dat['T'])
+                try:
+                    _ = T.shape[1]
+                    d = T[0].astype(int)
+                except:
+                    d = T.astype(int)
+
+                try:
+                    _ = len(d)
+                except TypeError as e:
+                    d = np.array([0])
+                    print(str(e))
+
+                x_train = np.transpose(np.array(dat['X']))
 
             for i, val in enumerate(d[1:]):
                 d[i+1] = d[i] + val
             disconts.append(list((d/resample).astype(int)))
 
             # choose first 306 channels and downsample
-            x_train = np.transpose(np.array(dat['X']))
             x_train = x_train[args.num_channels, ::resample]
 
             # create training and validation splits
