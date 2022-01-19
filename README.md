@@ -1,8 +1,8 @@
 # MEG-transfer-decoding
 
-For each run modify *args.py* to specify parameters and behavior, then run *training.py* which contains the main experimental pipeline:
+For each run modify *args.py* to specify parameters and behavior, then run *launch.py* which calls *training.py* which contains the main experimental pipeline:
 ```
-python training.py
+python launch.py
 ```
 
 Model and dataset classes can be found in the other appropiately named files.  
