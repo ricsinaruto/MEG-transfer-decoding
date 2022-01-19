@@ -114,8 +114,8 @@ class WavenetFullSimple(WavenetSimple):
     def build_model(self, args):
         super(WavenetFullSimple, self).build_model(args)
 
-        # add two 1x1 convolutions at the end
         del self.last_conv
+        # add two 1x1 convolutions at the end
         self.last_conv = [
             Conv1d(self.ch, self.ch, kernel_size=1, groups=args.groups),
             Conv1d(self.ch, args.num_channels, kernel_size=1)]
@@ -154,3 +154,32 @@ class WavenetFullSimple(WavenetSimple):
         with this model. It simply applies the residual connection.
         '''
         return data[:, :, -data_f.shape[2]:] + data_f
+
+
+class WavenetSimpleSkips(WavenetFullSimple):
+    '''
+    Simple version of wavenet with residual and skip connections.
+    '''
+    def build_model(self, args):
+        super(WavenetSimpleSkips, self).build_model(args)
+        self.conv_skip = Sequential(*[
+            Conv1d(self.ch, self.ch, kernel_size=1) for _ in self.cnn_layers])
+
+    def forward(self, x, sid=None):
+        x = self.first_conv(x)
+        skips = []
+
+        for conv, conv_skip in zip(self.cnn_layers, self.conv_skip):
+            xo = self.activation(self.dropout(conv(x)))
+            xo = conv_skip(xo)
+
+            x = x[:, :, -xo.shape[2]:] + xo
+            skips.append(xo)
+
+        # sum together skip connections
+        length = skips[-1].shape[2]
+        x = skips[0][:, :, -length:]
+        for xs in skips[1:]:
+            x = x + xs[:, :, -length:]
+
+        return None, x

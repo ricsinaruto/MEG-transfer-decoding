@@ -1,3 +1,8 @@
+launch_q.py
+launch_q2.py
+args_q.py
+args_q2.py
+btc_data.py
 scripts/donders_data/*
 scripts/simulated_data/*
 scripts/mrc_data/*
@@ -5,5 +10,6 @@ scripts/cichy_data/*
 data/*
 results/*
 tmp/*
+*.pyc
 *.asv
 *.mat

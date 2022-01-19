@@ -6,8 +6,8 @@ import torch
 import random
 import pickle
 
-from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Identity
-from torch.nn import MSELoss, LogSoftmax, Dropout, Dropout2d, Embedding, Linear
+from torch.nn import Sequential, Module, Conv1d, MaxPool1d
+from torch.nn import MSELoss, LogSoftmax, Dropout2d, Embedding, Linear
 from torch.optim import Adam
 import torch.nn.functional as F
 
@@ -18,27 +18,30 @@ from scipy.io import savemat
 
 class WavenetSimple(Module):
     '''
-    Implements a simplified version of wavenet no padding.
+    Implements a simplified version of wavenet without padding.
     '''
     def __init__(self, args):
         super(WavenetSimple, self).__init__()
         self.args = args
         self.inp_ch = args.num_channels
         self.out_ch = args.num_channels
-        # delete
-        #self.inp_ch = args.num_channels + args.embedding_dim
-        # delete
 
         self.timesteps = args.timesteps
         self.build_model(args)
 
         self.criterion = MSELoss().cuda()
         self.activation = self.args.activation
-        if self.args.linear:
-            self.activation = Identity()
 
         # add dropout to each layer
-        self.dropout = Dropout2d(args.p_drop)
+        self.dropout2d = Dropout2d(args.p_drop)
+
+    def loaded(self, args):
+        '''
+        When model is loaded from file, assign the new args object.
+        '''
+        self.args = args
+        self.shuffle_embeddings = False
+        self.dropout2d = Dropout2d(args.p_drop)
 
     def build_model(self, args):
         '''
@@ -56,7 +59,6 @@ class WavenetSimple(Module):
         # each layer consists of a dilated convolution
         # followed by a nonlinear activation
         for rate in args.dilations:
-            # modules.append(ConstantPad1d((rate, 0), 0.0))
             modules.append(Conv1d(self.ch,
                                   self.ch,
                                   kernel_size=args.kernel_size,
@@ -71,33 +73,67 @@ class WavenetSimple(Module):
 
         self.subject_emb = Embedding(args.subjects, args.embedding_dim)
 
+    def get_weight_nograd(self, layer):
+        return layer.weight.detach().clone().requires_grad_(False)
+
+    def get_weight(self, layer):
+        return layer.weight
+
+    def get_weights(self, grad=False):
+        '''
+        Return a list of all weights in the model.
+        '''
+        get_weight = self.get_weight if grad else self.get_weight_nograd
+
+        weights = [get_weight(layer) for layer in self.cnn_layers]
+        weights.append(get_weight(self.first_conv))
+        weights.append(get_weight(self.last_conv))
+
+        return weights
+
     def save_embeddings(self):
+        '''
+        Save subject embeddings.
+        '''
         weights = {'X': self.subject_emb.weight.detach().cpu().numpy()}
         savemat(os.path.join(self.args.result_dir, 'sub_emb.mat'), weights)
 
-    def forward3(self, x, sid=None):
-        # delete
-        #sid = sid.repeat(x.shape[2], 1).permute(1, 0)
-        #sid = self.subject_emb(sid).permute(0, 2, 1)
-        #x = torch.cat((x, sid), dim=1)
-        # delete
+    def dropout(self, x):
+        '''
+        Applies 2D dropout to 1D data by unsqueezeing.
+        '''
+        x = torch.unsqueeze(x, 3)
+        return torch.squeeze(self.dropout2d(x))
 
+    def forward4(self, x, sid=None):
+        '''
+        Only use the first few layers of Wavenet.
+        '''
         x = self.first_conv(x)
 
+        # the layer from which we should get the output is
+        # automatically calculated based on the receptive field
+        lnum = int(np.log(self.args.rf) / np.log(self.args.kernel_size)) - 1
         for i, layer in enumerate(self.cnn_layers):
             x = self.activation(self.dropout(layer(x)))
-            if i == len(self.cnn_layers) - 3:
-                class_out = x
+            if i == lnum:
+                break
 
-        return self.last_conv(x), class_out
+        return self.last_conv(x), x
 
     def forward(self, x, sid=None):
+        '''
+        Run a forward pass through the network.
+        '''
         x = self.first_conv(x)
 
         for layer in self.cnn_layers:
             x = self.activation(self.dropout(layer(x)))
 
         return self.last_conv(x), x
+
+    def end(self):
+        pass
 
     def loss(self, x, i=0, sid=None, train=True, criterion=None):
         '''
@@ -112,14 +148,20 @@ class WavenetSimple(Module):
         else:
             loss = criterion(output, target)
 
-        return loss, output, target, None
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss}
+
+        return losses, output, target
 
     def repeat_loss(self, batch):
         '''
         Baseline loss for repeating the same timestep for future.
         '''
         start = int(batch.shape[2] / 2)
-        return self.criterion(batch[:, :, start:-1], batch[:, :, start + 1:])
+        loss = self.criterion(batch[:, :, start:-1], batch[:, :, start + 1:])
+
+        return {'valloss/Repeat loss: ': loss}
 
     def ar_loss(self, output, target):
         '''
@@ -274,6 +316,10 @@ class WavenetSimple(Module):
         if input_mode == 'gaussian_noise':
             # input is gaussian noise
             data = torch.normal(0.0, noise, size=(channels, gen_len)).cuda()
+        elif input_mode == 'none':
+            data = torch.normal(0.0, noise, size=(channels, shift))
+            data = torch.cat((data, torch.zeros((channels, gen_len))), dim=1)
+            data = data.cuda()
         elif input_mode == 'shuffled_data':
             # input data is shuffled training data
             train = self.args.dataset.x_train[0, :]
@@ -318,7 +364,8 @@ class WavenetSimple(Module):
         for ch in range(channels):
             self.plot_welch(data[ch, :], axs[ch], ch)
 
-        path = os.path.join(self.args.result_dir, 'generated_freqs.svg')
+        name = 'generated_freqs_' + input_mode + mode + str(noise) + '.svg'
+        path = os.path.join(self.args.result_dir, name)
         fig.savefig(path, format='svg', dpi=1200)
         plt.close('all')
 
@@ -636,6 +683,51 @@ class WavenetSimple(Module):
         '''
 
 
+class WavenetSimpleUniToMulti(WavenetSimple):
+    '''
+    Initialize weights of multivariate model with univariate model,
+    and then only train the multivariate weights
+    '''
+    def loaded_(self, args):
+        self.args = args
+
+        # save current weights
+        self.fconv = self.first_conv
+        self.lconv = self.last_conv
+        self.layers = self.cnn_layers
+
+        # create new multivariate model
+        self.build_model(args)
+
+        # initialize weights
+        self.reset_weights()
+
+    def reset_weights(self):
+        '''
+        Reset univariate portions of the weights to the original univariates.
+        '''
+        with torch.torch.no_grad():
+            self.unitomulti(self.first_conv, self.fconv)
+            self.unitomulti(self.last_conv, self.lconv)
+            for new_layer, old_layer in zip(self.cnn_layers, self.layers):
+                self.unitomulti(new_layer, old_layer)
+
+    def unitomulti(self, new, old):
+        '''
+        Replace new univaraite weights with old weights.
+        '''
+        gin = int(old.in_channels/old.groups)
+        gout = int(old.out_channels/old.groups)
+        for i in range(old.groups):
+            new.weight[i*gout:(i+1)*gout, i*gin:(i+1)*gin, :] = old.weight[i*gout:(i+1)*gout, :, :]
+
+    def loss_(self, x, i=0, sid=None, train=True, criterion=None):
+        # reset weights on each iteration
+        self.reset_weights()
+
+        return super(WavenetSimpleUniToMulti, self).loss(x, i, sid, train, criterion)
+
+
 class WavenetSimpleShared(WavenetSimple):
     '''
     WavenetSimple but the same model for each sensor.
@@ -656,6 +748,9 @@ class WavenetSimpleShared(WavenetSimple):
 
 
 class WavenetSimpleChannelUp(WavenetSimple):
+    '''
+    WavenetSimple but channel dimension increases with each layer.
+    '''
     def build_model(self, args):
         '''
         Specify the layers of the model.
@@ -684,17 +779,19 @@ class WavenetSimpleSTS(WavenetSimple):
     '''
     Wavenet with 3 consecutive blocks: Spatial -> Temporal -> Spatial
     '''
-
     def build_model(self, args):
         '''
         Specify the layers of the model.
         '''
         self.ch = args.ch_mult * self.inp_ch
+
+        # spatial beginning
         self.spatial_conv1 = Conv1d(
             self.inp_ch, self.ch, kernel_size=1, groups=1)
         self.spatial_conv2 = Conv1d(
             self.ch, self.ch, kernel_size=1, groups=1)
 
+        # spatial end
         self.spatial_conv3 = Conv1d(
             self.ch, self.ch, kernel_size=1, groups=1)
         self.spatial_conv4 = Conv1d(
@@ -706,50 +803,87 @@ class WavenetSimpleSTS(WavenetSimple):
 
     def forward(self, x, sid=None):
         bs = x.shape[0]
+
+        # first do 2 spatial convolutions
         x = self.activation(self.dropout(self.spatial_conv1(x)))
         x = self.activation(self.dropout(self.spatial_conv2(x)))
         x = x.reshape(bs, -1, int(self.ch/self.inp_ch), x.shape[2])
         x = x.reshape(-1, x.shape[2], x.shape[3])
 
+        # then do a number of temporal convolutions
         for layer in self.cnn_layers:
             x = self.activation(self.dropout(layer(x)))
 
+        # finish with 2 more spatial convolutions
         x = x.reshape(bs, -1, x.shape[1], x.shape[2])
         x = x.reshape(x.shape[0], -1, x.shape[3])
         x = self.activation(self.dropout(self.spatial_conv3(x)))
 
         return self.spatial_conv4(x), x
 
+    def forward4(self, x, sid=None):
+        '''
+        Same as forward,
+        but only run up to a specific layer of the temporal part.
+        '''
+        bs = x.shape[0]
+        x = self.activation(self.dropout(self.spatial_conv1(x)))
+        x = self.activation(self.dropout(self.spatial_conv2(x)))
+        x = x.reshape(bs, -1, int(self.ch/self.inp_ch), x.shape[2])
+        x = x.reshape(-1, x.shape[2], x.shape[3])
+
+        # get output of a specific temporal layer based on the receptive field
+        lnum = int(np.log(self.args.rf) / np.log(self.args.kernel_size)) - 1
+        for i, layer in enumerate(self.cnn_layers):
+            x = self.activation(self.dropout(layer(x)))
+            if i == lnum:
+                break
+
+        x = x.reshape(bs, -1, x.shape[1], x.shape[2])
+        x = x.reshape(x.shape[0], -1, x.shape[3])
+        return None, x
+
 
 class WavenetSimplePCA(WavenetSimple):
+    '''
+    WavenetSimple with a linear transform over channels at beginning and end.
+    '''
     def build_model(self, args):
+        # wrap Wavenet with a linear transform to reduce channel dimensionality
         self.encoder = Linear(self.inp_ch, args.red_channels, bias=False)
         self.decoder = Linear(args.red_channels, self.inp_ch, bias=False)
 
+        self.out_ch = args.red_channels
         self.inp_ch = args.red_channels
         super(WavenetSimplePCA, self).build_model(args)
 
     def forward(self, x, sid=None):
         x = self.encoder(x.permute(0, 2, 1)).permute(0, 2, 1)
         out, x = super(WavenetSimplePCA, self).forward(x)
-
         out = self.decoder(out.permute(0, 2, 1)).permute(0, 2, 1)
+
         return out, None
 
 
-class WavenetSimplePCAfixed(WavenetSimple):
+class WavenetSimplePCAfixed(WavenetSimplePCA):
+    '''
+    Same as before, but linear transforms are initialized
+    with PCA coefficients and fixed.
+    '''
     def build_model(self, args):
-        pca_model = pickle.load(open(args.pca_path, 'rb'))
-        self.encoder = Linear(self.inp_ch, args.red_channels, bias=False)
-        self.decoder = Linear(args.red_channels, self.inp_ch, bias=False)
+        super(WavenetSimplePCAfixed, self).build_model(args)
 
-        self.encoder.weight = torch.Tensor(pca_model.components_.T)
-        self.decoder.weight = torch.Tensor(pca_model.components_)
+        pca_model = pickle.load(open(args.pca_path, 'rb'))
+
+        # initialize with PCA coefficients
+        enc = torch.Tensor(pca_model.components_)
+        dec = torch.Tensor(pca_model.components_.T)
+        self.encoder.weight = torch.nn.Parameter(enc)
+        self.decoder.weight = torch.nn.Parameter(dec)
+
+        # fix weights
         self.encoder.weight.requires_grad = False
         self.decoder.weight.requires_grad = False
-
-        self.inp_ch = args.red_channels
-        super(WavenetSimplePCAfixed, self).build_model(args)
 
 
 class WavenetSimpleSembConcat(WavenetSimple):
@@ -757,16 +891,100 @@ class WavenetSimpleSembConcat(WavenetSimple):
     Implements simplified wavenet with concatenated subject embeddings.
     '''
     def build_model(self, args):
+        self.shuffle_embeddings = False
         self.inp_ch = args.num_channels + args.embedding_dim
         super(WavenetSimpleSembConcat, self).build_model(args)
 
-    def forward(self, x, sid=None):
-        # concatenate subject embeddings
+    def embed(self, x, sid):
+        # concatenate subject embeddings with input data
         sid = sid.repeat(x.shape[2], 1).permute(1, 0)
         sid = self.subject_emb(sid).permute(0, 2, 1)
         x = torch.cat((x, sid), dim=1)
 
+        return x
+
+    def get_weights(self, grad=False):
+        weights = super(WavenetSimpleSembConcat, self).get_weights(grad)
+        if self.args.reg_semb:
+            weights.append(self.subject_emb.weight)
+
+        return weights
+
+    def forward(self, x, sid=torch.LongTensor([0]).cuda()):
+        # shuffle embedding values if needed
+        if self.shuffle_embeddings:
+            subid = int(sid[0].detach().cpu().numpy())
+            indices = torch.randperm(self.subject_emb.weight.shape[1])
+            w = self.subject_emb.weight.detach()
+            w[subid, :] = w[subid, indices]
+            self.subject_emb.weight = torch.nn.Parameter(w)
+
+        x = self.embed(x, sid)
         return super(WavenetSimpleSembConcat, self).forward(x)
+
+    def forward4(self, x, sid=torch.LongTensor([0]).cuda()):
+        x = self.embed(x, sid)
+        return super(WavenetSimpleSembConcat, self).forward4(x)
+
+    def kernel_network_FIR(self,
+                           folder='kernels_network_FIR',
+                           generated_data=None):
+        '''
+        Get FIR properties for each kernel by running the whole network.
+        '''
+        self.eval()
+        name = folder + 'ch' + str(self.args.channel_idx)
+        folder = os.path.join(self.args.result_dir, name)
+        if not os.path.isdir(folder):
+            os.mkdir(folder)
+
+        # data is either drawn from gaussian or passed as argument to this func
+        shape = (self.args.num_channels, self.args.generate_length)
+        data = np.random.normal(0, self.args.generate_noise, shape)
+        if generated_data is not None:
+            data = generated_data
+        data = torch.Tensor(data).cuda().reshape(1, self.args.num_channels, -1)
+
+        # apply subject embedding
+        sid = torch.LongTensor([10]).cuda()
+        sid = sid.repeat(data.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+        data = torch.cat((data, sid), dim=1)
+        data = self.first_conv(data)
+
+        # loop over whole network
+        self.kernel_network_FIR_loop(folder, data)
+
+
+class WavenetSimpleChetSemb(WavenetSimple):
+    '''
+    Add embeddings to input at each layer instead of only the beginning.
+    '''
+    def build_model(self, args):
+        super(WavenetSimpleChetSemb, self).build_model(args)
+        emb = args.embedding_dim
+
+        # conditioning layer to be used for subject embeddings
+        cond1x1 = [Conv1d(emb, self.ch, kernel_size=1) for _ in args.dilations]
+        self.cond1x1 = Sequential(*cond1x1)
+
+    def embed(self, x, sid):
+        # concatenate subject embeddings with input data
+        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+
+        return sid
+
+    def forward(self, x, sid):
+        x = self.first_conv(x)
+
+        # at each layer use a conditioning layer to add the subject embeddings
+        for xlayer, slayer in zip(self.cnn_layers, self.cond1x1):
+            x = xlayer(x)
+            s = slayer(self.embed(x, sid))
+            x = self.activation(self.dropout(x + s))
+
+        return self.last_conv(x), x
 
 
 class WavenetSimpleSembAdd(WavenetSimple):
@@ -784,7 +1002,7 @@ class WavenetSimpleSembAdd(WavenetSimple):
 
 class WavenetSimpleSembMult(WavenetSimple):
     '''
-    Implements simplified wavenet with added subject embeddings.
+    Implements simplified wavenet with multiplied subject embeddings.
     '''
     def forward(self, x, sid=None):
         # multiply subject embedding with input
@@ -974,7 +1192,6 @@ class Conv1PoolNet(ConvPoolNet):
     '''
     Simple convolutional model using max pooling only in first layer.
     '''
-
     def forward(self, x):
         x = self.first_conv(x)
         x = self.activation(self.maxpool_layers[0](self.cnn_layers[0](x)))
@@ -1004,6 +1221,7 @@ class WavenetCPC(WavenetSimple):
 
         targets = []
         numbers = np.arange(x.shape[2])
+
         # create special target with distractors for each output timestep
         for i in range(num_out):
             current = i + x.shape[2] - num_out + self.timesteps - 1

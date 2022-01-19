@@ -3,9 +3,11 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from classifiers_linear import LogisticReg, LDA
 from wavenets_simple import Conv1PoolNet, ConvPoolNet
 from wavenets_simple import WavenetSimple, WavenetSimpleSembAdd, WavenetSimpleSembMult
-from wavenets_classifier import WavenetClassifier, SimpleClassifier, WavenetClassPred
+from wavenets_classifier import WavenetClassifier, SimpleClassifier, WavenetClassPred, SimpleClassifier0
+from wavenets_classifier import WavenetClassifierSemb
 from wavenets_full import WavenetFull, WavenetFullSimple
 from simulated_data import EventSimulation, EventSimulationQuantized
 from mrc_data import MRCData
@@ -16,7 +18,8 @@ class Args:
     gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'train': True,
+            'LDA_baseline': True,
+            'train': False,
             'generate': False,
             'recursive': False,
             'analyse_kernels': False,
@@ -25,39 +28,43 @@ class Args:
             'plot_kernels': False,
             'feature_importance': False,
             'save_validation_ch': False,
-            'save_validation_subs': False}
+            'save_validation_subs': False,
+            'pca_sensor_loss': False,
+            'compare_layers': False,
+            'test': False,
+            'window_eval': False,
+            'LDA_eval': False,
+            'PFIts': False}
 
     def __init__(self):
         # training arguments
         self.name = 'args.py'
+        self.load_dataset = True
         self.learning_rate = 0.00005
-        self.batch_size = 128
-        self.epochs = 3000
+        self.max_trials = 1
+        self.batch_size = 59
+        self.epochs = 2000
         self.val_freq = 20
         self.print_freq = 5
         self.num_plot = 1
         self.plot_ch = 1
         self.save_curves = True
-        self.load_model = [os.path.join(
-            'results',
-            'cichy_epoched',
-            'subject1_mne_wavenet2ch_pretrainpred',)]
+        self.load_model = False
         self.result_dir = [os.path.join(
             'results',
             'cichy_epoched',
-            'subject1_mne_wavenet2ch_pretrainpred',
-            'classification')]
-        self.model = WavenetClassPred
+            'indiv_lda_25hz_conv80',
+            'subj' + str(i)) for i in range(15)]
+        self.model = LDA
         self.dataset = CichyData
 
         # wavenet arguments
-        self.activation = torch.asinh
+        self.activation = torch.nn.Identity()
         self.linear = False
-        self.pred = False
         self.subjects = 0
         self.embedding_dim = 0
         self.num_samples_CPC = 20
-        self.p_drop = 0.7
+        self.p_drop = 0.6
         self.k_CPC = 1
         self.mu = 255
         self.ch_mult = 2
@@ -65,30 +72,43 @@ class Args:
         self.conv1x1_groups = 1
         self.kernel_size = 2
         self.timesteps = 1
-        self.num_classes = 118
-        self.sample_rate = 257
+        self.sample_rate = 50
         self.rf = 64
-        rf = 512
+        rf = 64
         ks = self.kernel_size
-        nl = int(np.log(self.rf) / np.log(ks))
+        nl = int(np.log(rf) / np.log(ks))
         self.dilations = [ks**i for i in range(nl)]  # wavenet mode
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
+        # classifier arguments
+        self.load_conv = [os.path.join(
+            'results',
+            'cichy_epoched',
+            'indiv_simpleclasslinear_25hz',
+            'subj' + str(i), 'model.pt') for i in range(15)]
+        self.l1_loss = False
+        self.pred = False
+        self.alpha_norm = 0.0
+        self.num_classes = 118
+        self.units = [1000, 300]
+        self.dim_red = 80
+
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
-                                 'cichy118_cont', 'preproc_data_onepass', 'subj0')
-        self.data_path = [os.path.join(data_path)]
+                                 'cichy118_cont', 'preproc_data_onepass', 'lowpass25hz')
+        self.data_path = [os.path.join(data_path, 'subj' + str(i)) for i in range(15)]
         self.num_channels = list(range(307))
+        self.whiten = True
         self.crop = 1
         self.split = 0.2
-        self.sr_data = 250
+        self.sr_data = 100
         self.num_components = 0
         self.resample = 7
         self.save_norm = True
-        self.norm_path = [os.path.join(data_path, 'norm_coeff')]
-        self.pca_path = [os.path.join(data_path, 'pca128_model')]
+        self.norm_path = os.path.join(data_path, 'norm_coeff')
+        self.pca_path = os.path.join(data_path, 'pca128_model')
         self.load_pca = False
-        self.dump_data = [os.path.join(data_path, 'train_data_trials', 'c')]
+        self.dump_data = [os.path.join(data_path, 'subj' + str(i), 'train_data_pca306', 'c') for i in range(15)]
         self.load_data = self.dump_data
 
         # analysis arguments
@@ -124,7 +144,7 @@ class Args:
         self.uni = False
         self.save_AR = False
         self.do_anal = False
-        self.AR_load_path = [os.path.join(
+        self.AR_load_path = os.path.join(
             'results',
             'mrc',
-            '60subjects_notch_sensors_multiAR64')]
+            '60subjects_notch_sensors_multiAR64')

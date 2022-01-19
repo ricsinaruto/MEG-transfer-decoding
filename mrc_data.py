@@ -1,8 +1,7 @@
 import os
-import copy
-import torch
 import mat73
 import numpy as np
+
 from scipy.io import loadmat
 
 from donders_data import DondersData
@@ -49,7 +48,7 @@ class MRCData(DondersData):
             paths = os.listdir(args.data_path)
             paths = [os.path.join(args.data_path, p) for p in paths]
             paths = [p for p in paths if not os.path.isdir(p)]
-            paths = [p for p in paths if 'subject' in p.split('/')[-1]]
+            paths = [p for p in paths if 'subj' in p.split('/')[-1]]
         print('Number of subjects: ', len(paths))
 
         resample = int(1000/args.sr_data)
@@ -58,6 +57,8 @@ class MRCData(DondersData):
         disconts = []
         for path in paths:
             print(path)
+
+            # load eithet .mat or .npy files
             if args.numpy:
                 x_train = np.load(path).T
                 d = np.array([0])
@@ -83,6 +84,7 @@ class MRCData(DondersData):
 
                 x_train = np.transpose(np.array(dat['X']))
 
+            # add up discontinuous indices
             for i, val in enumerate(d[1:]):
                 d[i+1] = d[i] + val
             disconts.append(list((d/resample).astype(int)))

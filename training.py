@@ -19,122 +19,171 @@ from loss import Loss
 class Experiment:
     def __init__(self, args):
         '''
-        Initialize model, dataset and optimizer.
+        Initialize model and dataset using an Args object.
         '''
+        # scale epochs according to ratio of trials used
+        args.epochs = int(args.epochs * args.max_trials)
         self.args = args
         self.loss = Loss()
         self.val_losses = []
         self.train_losses = []
 
-        if not os.path.isdir(self.args.result_dir):
+        # create folder for results
+        if os.path.isdir(self.args.result_dir):
+            print('Result already directory exists, writing to it.')
+            print(self.args.result_dir)
+        else:
             os.mkdir(self.args.result_dir)
+            print('New result directory created.')
+            print(self.args.result_dir)
 
-        # save args
+        # save args object
         path = os.path.join(self.args.result_dir, 'args_saved.py')
         os.system('cp ' + args.name + ' ' + path)
 
         # initialize dataset
-        self.dataset = self.args.dataset(self.args)
+        if args.load_dataset:
+            self.dataset = args.dataset(args)
+            print('Dataset initialized.')
 
         # load model if path is specified
         if args.load_model:
             self.model_path = os.path.join(args.load_model, 'model.pt')
             self.model = torch.load(self.model_path)
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-            #self.args.dataset = self.dataset
-            #torch.save(self.model, self.model_path, pickle_protocol=4)
             self.model.loaded(args)
             self.model.cuda()
+            print('Model loaded from file.')
+            #self.args.dataset = self.dataset
         else:
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-            self.model = self.args.model(self.args).cuda()
+            try:
+                self.model = self.args.model(self.args).cuda()
+                print('Model initialized with cuda.')
+            except:  # if cuda not available or not cuda model
+                self.model = self.args.model(self.args)
+                print('Model initialized without cuda.')
 
-        # initialize optimizer
-        self.optimizer = Adam(self.model.parameters(),
-                              lr=self.args.learning_rate)
-
-        # calculate number of total parameters in model
-        parameters = [param.numel() for param in self.model.parameters()]
-        print('Number of parameters: ', sum(parameters), flush=True)
+        try:
+            # calculate number of total parameters in model
+            parameters = [param.numel() for param in self.model.parameters()]
+            print('Number of parameters: ', sum(parameters), flush=True)
+        except:
+            print('Can\'t calculate number of parameters.')
 
     def train(self):
         '''
         Main training loop over epochs and training batches.
         '''
+        # initialize optimizer
+        optimizer = Adam(self.model.parameters(),
+                         lr=self.args.learning_rate,
+                         weight_decay=self.args.alpha_norm)
+
+        # start with a pass over the validation set
         best_val = 1000000
         self.evaluate()
 
         for epoch in range(self.args.epochs):
             self.model.train()
-            self.loss.list = []
+            self.loss.dict = {}
 
-            # shuffle each epoch
-            # ind = torch.randperm(self.dataset.x_train_t.shape[0])
-            # self.dataset.x_train_t = self.dataset.x_train_t[ind, :, :]
+            # save initial model
+            if epoch == 0:
+                path = os.path.join(self.args.result_dir, 'model_init.pt')
+                torch.save(self.model, path, pickle_protocol=4)
+                print('Model saved to result directory.')
 
+            # loop over batches
             for i in range(self.dataset.train_batches):
                 batch, sid = self.dataset.get_train_batch(i)
-                if batch.shape[0] < 1:
-                    break
+                # need to check whether it's an empty batch
+                try:
+                    if batch.shape[0] < 1:
+                        break
+                except AttributeError:
+                    pass
 
-                loss, _, _, loss2 = self.model.loss(batch, i, sid, train=True)
+                losses, _, _, = self.model.loss(batch, i, sid, train=True)
 
-                loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-                self.loss.append(loss, loss2)
+                # optimize model according to the optimization loss
+                optkey = [key for key in losses if 'optloss' in key]
+                losses[optkey[0]].backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                self.loss.append(losses)
 
+            # print training losses
             if not epoch % self.args.print_freq:
-                loss = self.loss.print('Train loss: ')
-                self.train_losses.append(loss)
+                losses = self.loss.print('trainloss')
+                self.train_losses.append([losses[k] for k in losses])
 
-            # only save model if validation loss is best so far
+            # run validation pass and save model
             if not epoch % self.args.val_freq:
-                loss = self.evaluate()
-                self.val_losses.append(loss)
-                if loss < best_val:
-                    best_val = loss
-                    torch.save(self.model, self.model_path, pickle_protocol=4)
+                losses, _, _ = self.evaluate()
+                loss = [losses[k] for k in losses if 'saveloss' in k]
+                losses = [losses[k] for k in losses if 'saveloss' not in k]
 
+                self.val_losses.append(losses)
+
+                # only save model if validation loss is best so far
+                if loss[0] < best_val:
+                    best_val = loss[0]
+                    torch.save(self.model, self.model_path, pickle_protocol=4)
+                    print('Validation loss improved, model saved.')
+
+                # save loss plots if needed
                 if self.args.save_curves:
                     self.save_curves()
 
+        # wrap up training and save validation loss
         self.model.end()
-        self.evaluate()
+        self.save_validation()
 
     def save_curves(self):
         '''
-        Save train and validation loss curves to file.
+        Save train and validation loss plots to file.
         '''
         val_losses = np.array(self.val_losses)
-        val_ratio = int(len(self.train_losses)/len(val_losses))
-        val_losses = np.repeat(val_losses, val_ratio)
+        train_losses = np.array(self.train_losses)
 
-        plt.semilogy(self.train_losses, linewidth=1, label='training loss')
-        plt.semilogy(val_losses, linewidth=1, label='validation loss')
-        plt.legend()
+        if val_losses.shape[0] > 2:
+            val_ratio = int((train_losses.shape[0]-1)/(val_losses.shape[0]-1))
+            val_losses = np.repeat(val_losses, val_ratio, axis=0)
 
-        path = os.path.join(self.args.result_dir, 'losses.svg')
-        plt.savefig(path, format='svg', dpi=1200)
-        plt.close('all')
+            plt.semilogy(train_losses, linewidth=1, label='training losses')
+            plt.semilogy(val_losses, linewidth=1, label='validation losses')
+            plt.legend()
+
+            path = os.path.join(self.args.result_dir, 'losses.svg')
+            plt.savefig(path, format='svg', dpi=1200)
+            plt.close('all')
 
     def evaluate(self):
         '''
         Evaluate model on the validation dataset.
         '''
-        self.loss.list = []
+        self.loss.dict = {}
         self.model.eval()
 
+        # loop over validation batches
         for i in range(self.dataset.val_batches):
             batch, sid = self.dataset.get_val_batch(i)
-            loss, _, _, loss2 = self.model.loss(batch, i, sid, train=False)
-            self.loss.append(loss, loss2)
+            loss, output, target = self.model.loss(batch, i, sid, train=False)
+            self.loss.append(loss)
 
-        loss = self.loss.print('Validation loss: ')
-        return loss
+        losses = self.loss.print('valloss')
+        return losses, output, target
 
     def save_validation(self):
-        loss = self.evaluate()
+        '''
+        Save validation loss to file.
+        '''
+        loss, output, target = self.evaluate()
+
+        # print variance if needed
+        if output is not None and target is not None:
+            print(torch.std((output-target).flatten()))
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
         with open(path, 'w') as f:
@@ -142,24 +191,29 @@ class Experiment:
 
     def save_validation_subs(self):
         '''
-        Evaluate model on the validation dataset for each subject.
+        Print validation losses separately on each subject's dataset.
         '''
         self.model.eval()
-        mse = MSELoss(reduction='none').cuda()
         losses = []
 
+        # don't reduce the loss so we can separate it according to subjects
+        mse = MSELoss(reduction='none').cuda()
+
+        # loop over validation batches
         for i in range(self.dataset.val_batches):
             batch, sid = self.dataset.get_val_batch(i)
-            loss, _, _, loss2 = self.model.loss(
+            loss_dict, _, _ = self.model.loss(
                 batch, i, sid, train=False, criterion=mse)
 
-            loss = torch.mean(loss, (1, 2)).detach()
+            loss = [loss_dict[k] for k in loss_dict if 'valcriterion' in k]
+            #loss = torch.mean(loss, (1, 2)).detach()
+            loss = loss[0].detach()
             losses.append((sid, loss))
 
         sid = torch.cat(tuple([loss[0] for loss in losses]))
         loss = torch.cat(tuple([loss[1] for loss in losses]))
 
-        path = os.path.join(self.args.result_dir, 'val_loss.txt')
+        path = os.path.join(self.args.result_dir, 'val_loss_subs.txt')
         with open(path, 'w') as f:
             for i in range(self.args.subjects):
                 sub_loss = torch.mean(loss[sid == i]).item()
@@ -167,7 +221,8 @@ class Experiment:
 
     def save_validation_channels(self):
         '''
-        Evaluate model for each channel separately
+        Evaluate model for each channel separately.
+        Needs an update to work.
         '''
         self.model.eval()
         mse = MSELoss(reduction='none').cuda()
@@ -202,7 +257,8 @@ class Experiment:
 
     def pca_sensor_loss(self):
         '''
-        Evaluate model for each channel separately
+        Loss between pca and non-pca data.
+        Needs an update to work.
         '''
         self.model.eval()
         self.loss.list = []
@@ -238,6 +294,37 @@ class Experiment:
         loss = mse(outputs, targets)
         print(loss.item())
 
+    def lda_baseline(self):
+        '''
+        Train and save any model from classifiers_linear.py
+        '''
+        acc = self.model.run(self.dataset.x_train_t, self.dataset.x_val_t)
+        print(acc)
+
+        with open(self.model_path, 'wb') as file:
+            pickle.dump(self.model, file)
+
+        path = os.path.join(self.args.result_dir, 'val_loss.txt')
+        with open(path, 'w') as f:
+            f.write(str(acc))
+
+    def lda_eval(self):
+        '''
+        Evaluate any linear classifier on each subject separately.
+        '''
+        # load model
+        with open(self.model_path, 'rb') as file:
+            self.model = pickle.load(file)
+
+        path = os.path.join(self.args.result_dir, 'val_loss_subs.txt')
+        with open(path, 'w') as f:
+            for i in range(self.args.subjects):
+                inds = self.dataset.sub_id['val'] == i
+                x_val = self.dataset.x_val_t[inds, :, :]
+
+                acc = self.model.eval(x_val)
+                f.write(str(acc) + '\n')
+
     def repeat_baseline(self):
         '''
         Simple baseline that repeats current timestep as prediction for next.
@@ -246,11 +333,7 @@ class Experiment:
             batch, sid = self.dataset.get_val_batch(i)
             self.loss.append(self.model.repeat_loss(batch))
 
-        self.loss.print('Repeat baseline loss: ')
-
-    def plot_freqs(self, ax):
-        for freq in self.args.freqs:
-            ax.axvline(x=freq, color='red')
+        self.loss.print('valloss')
 
     def AR_analysis(self, params):
         '''
@@ -435,7 +518,7 @@ class Experiment:
 
     def feature_importance(self):
         '''
-        Evaluate how important is each timestep to prediction
+        Evaluate how important is each timestep to prediction.
         '''
         self.model.eval()
         rf = self.args.rf
@@ -474,9 +557,43 @@ class Experiment:
             for loss in losses:
                 f.write(str(loss) + '\n')
 
+    def PFIts(self):
+        '''
+        Newer Permutation Feature Importance (PFI) function for timesteps.
+        Could also try the inverse, like a combination of PFI and window_eval.
+        '''
+        loss_list = []
+        hw = self.args.halfwin
+        val_t = self.dataset.x_val_t.clone()
+        shuffled_val_t = self.dataset.x_val_t.clone()
+        chn = val_t.shape[1] - 1
+        times = val_t.shape[2]
+
+        # first permute channels across all timesteps
+        idx = np.random.rand(*val_t[:, :chn, 0].T.shape).argsort(0)
+        for i in range(times):
+            a = shuffled_val_t[:, :chn, i].T
+            out = a[idx, np.arange(a.shape[1])].T
+            shuffled_val_t[:, :chn, i] = out
+
+        # slide over the epoch and always permute timesteps within a window
+        for i in range(hw, times-hw):
+            self.dataset.x_val_t = val_t.clone()
+            if i > 0:
+                window = shuffled_val_t[:, :chn, i-hw:i+hw].clone()
+                self.dataset.x_val_t[:, :chn, i-hw:i+hw] = window
+
+            losses, _, _ = self.evaluate()
+            loss = [losses[k] for k in losses if 'Validation accuracy' in k]
+            loss_list.append(str(loss[0]))
+
+        path = os.path.join(self.args.result_dir, 'val_loss_PFIts.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(loss_list))
+
     def freq_loss(self, generated, target):
         '''
-        Compute loss for each event type in the data.
+        Compute loss for each event type in the simulated data.
         generated: generated timeseries for validation data
         target: ground truth validation data
         '''
@@ -487,15 +604,82 @@ class Experiment:
             loss = self.model.ar_loss(generated[ind, :, 0], target[ind, :, 0])
             print('Frequency ', freq, ' loss: ', loss.item())
 
-    def noise_mse(self):
+    def input_freq(self):
         '''
-        Compute the MSE of two normal distributions.
+        Plot the PSD of the training data.
         '''
-        data = torch.normal(0, 1, size=(1, self.args.sr_data*50)).cuda()
-        target = torch.normal(0, 1, size=(1, self.args.sr_data*50)).cuda()
-        criterion = MSELoss().cuda()
-        loss = criterion(data, target)
-        print(loss.item())
+        figsize = (15, 10*self.args.num_channels)
+        fig, axs = plt.subplots(self.args.num_channels+1, figsize=figsize)
+
+        x_train = self.dataset.x_train
+
+        # loop over all channels
+        for ch in range(x_train.shape[0]):
+            # compute fft of learned input
+            self.model.plot_welch(x_train[ch], axs[ch])
+
+        filename = os.path.join(self.args.result_dir, 'input_freq.svg')
+        fig.savefig(filename, format='svg', dpi=2400)
+        plt.close('all')
+
+    def test(self):
+        '''
+        Run model with shuffled embeddings.
+        '''
+        self.model.eval()
+        loss_list = []
+
+        self.model.wavenet.shuffle_embeddings = False
+        for i in range(101):
+            if i == 1:
+                self.model.wavenet.shuffle_embeddings = True
+
+            batch, sid = self.dataset.get_val_batch(0)
+            loss, output, target = self.model.loss(batch, 0, sid, train=False)
+            loss = [loss[k] for k in loss if 'Validation accuracy' in k]
+
+            loss = str(loss[0].item())
+            loss_list.append(loss)
+            print(loss)
+
+        path = os.path.join(self.args.result_dir, 'val_loss_embshuffle.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(loss_list))
+
+    def window_eval(self):
+        '''
+        Slide a window over validation data and zero out values outside of it.
+        '''
+        loss_list = []
+        inp_halfwin = 128
+        inp_win = 256
+        halfwin = self.args.halfwin
+        sig_len = 256
+        val_t = self.dataset.x_val_t[:, :, -275:-19]
+
+        # slide window over timesteps
+        for i in range(halfwin, sig_len - halfwin):
+            start = 0 if i < inp_halfwin else i-inp_halfwin
+            start = start if i + inp_halfwin < sig_len else sig_len - inp_win
+            self.dataset.x_val_t = val_t[:, :, start:start+inp_win].clone()
+
+            # values outside the window are set to 0
+            self.dataset.x_val_t[:, :306, :i-start-halfwin] = 0
+            self.dataset.x_val_t[:, :306, i-start+halfwin:] = 0
+            print(self.dataset.x_val_t[0, 0, :])
+
+            losses, _, _ = self.evaluate()
+            loss = [losses[k] for k in losses if 'Validation accuracy' in k]
+            loss_list.append(str(loss[0]))
+
+        path = os.path.join(
+            self.args.result_dir, 'val_loss_windows' + str(halfwin) + '.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(loss_list))
+
+    def plot_freqs(self, ax):
+        for freq in self.args.freqs:
+            ax.axvline(x=freq, color='red')
 
     def analyse_activations(self):
         self.model.analyse_activations()
@@ -515,39 +699,42 @@ class Experiment:
     def kernel_network_IIR(self):
         self.model.kernel_network_IIR()
 
+    def compare_layers(self):
+        self.model.compare_layers()
+
     def save_embeddings(self):
+        # only run this if there are multiple subjects
         if self.args.subjects > 0:
             self.model.save_embeddings()
 
-    def input_freq(self):
-        figsize = (15, 10*self.args.num_channels)
-        fig, axs = plt.subplots(self.args.num_channels+1, figsize=figsize)
-
-        x_train = self.dataset.x_train
-
-        # loop over all channels
-        for ch in range(x_train.shape[0]):
-            # compute fft of learned input
-            self.model.plot_welch(x_train[ch], axs[ch])
-
-        filename = os.path.join(self.args.result_dir, 'input_freq.svg')
-        fig.savefig(filename, format='svg', dpi=2400)
-        plt.close('all')
-
 
 def main(Args):
+    '''
+    Main function creating an experiment object and running everything.
+    This should be called from launch.py, and it needs an Args object.
+    '''
     args = Args()
+
+    def checklist(x, i):
+        # check if an argument is list or not
+        return x[i] if isinstance(x, list) else x
+
     # if list of paths is given, then process everything individually
     for i, d_path in enumerate(args.data_path):
         args_pass = Args()
         args_pass.data_path = d_path
-        args_pass.result_dir = args.result_dir[i]
-        args_pass.dump_data = args.dump_data[i]
-        args_pass.load_data = args.load_data[i]
-        args_pass.norm_path = args.norm_path[i]
-        args_pass.pca_path = args.pca_path[i]
-        args_pass.AR_load_path = args.AR_load_path[i]
-        args_pass.load_model = args.load_model[i]
+        args_pass.result_dir = checklist(args.result_dir, i)
+        args_pass.dump_data = checklist(args.dump_data, i)
+        args_pass.load_data = checklist(args.load_data, i)
+        args_pass.norm_path = checklist(args.norm_path, i)
+        args_pass.pca_path = checklist(args.pca_path, i)
+        args_pass.AR_load_path = checklist(args.AR_load_path, i)
+        args_pass.load_model = checklist(args.load_model, i)
+        args_pass.max_trials = checklist(args.max_trials, i)
+        args_pass.batch_size = checklist(args.batch_size, i)
+        args_pass.p_drop = checklist(args.p_drop, i)
+        args_pass.learning_rate = checklist(args.learning_rate, i)
+        args_pass.load_conv = checklist(args.load_conv, i)
 
         # skip if subject does not exist
         if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
@@ -556,11 +743,14 @@ def main(Args):
 
         e = Experiment(args_pass)
 
+        # only run the functions specified in args
         if Args.func['repeat_baseline']:
             e.input_freq()
             e.repeat_baseline()
         if Args.func['AR_baseline']:
             e.AR_baseline()
+        if Args.func['LDA_baseline']:
+            e.lda_baseline()
         if Args.func['train']:
             e.train()
         if Args.func['analyse_kernels']:
@@ -583,11 +773,15 @@ def main(Args):
             e.save_validation_channels()
         if Args.func['pca_sensor_loss']:
             e.pca_sensor_loss()
+        if Args.func['compare_layers']:
+            e.compare_layers()
+        if Args.func['test']:
+            e.test()
+        if Args.func['LDA_eval']:
+            e.lda_eval()
+        if Args.func['window_eval']:
+            e.window_eval()
+        if Args.func['PFIts']:
+            e.PFIts()
 
         e.save_embeddings()
-
-
-'''
-if __name__ == "__main__":
-    main()
-'''

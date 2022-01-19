@@ -18,6 +18,7 @@ class DondersData:
         '''
         Load data and apply pca, then create batches.
         '''
+        self.inds = {'train': [], 'val': []}
         self.args = args
         self.shift = args.sample_rate - args.timesteps - args.rf + 1
         self.mean = None
@@ -165,8 +166,9 @@ class DondersData:
         '''
         Get batch with index i from dataset data.
         '''
-        end = data.shape[0] if (i+1)*self.bs > data.shape[0] else (i+1)*self.bs
-        return data[i*self.bs:end, :, :], self.sub_id[split][i*self.bs:end]
+        bs = self.bs[split]
+        end = data.shape[0] if (i+1)*bs > data.shape[0] else (i+1)*bs
+        return data[i*bs:end, :, :], self.sub_id[split][i*bs:end]
 
     def get_train_batch(self, i):
         # helper for getting a training batch
@@ -176,11 +178,29 @@ class DondersData:
         # helper for getting a validation batch
         return self.get_batch(i, self.x_val_t, 'val')
 
+    def find_bs(self, bs, shape):
+        '''
+        Convinience function for setting the batch size.
+        '''
+        if self.args.pred:
+            return bs
+
+        # if dealing with epoched data we ideally want to include all epochs
+        for i in range(bs):
+            if not shape % (bs - i):
+                return bs - i
+
     def set_common(self):
         # set common parameters
-        self.bs = self.args.batch_size
-        self.train_batches = int(self.x_train_t.shape[0] / self.bs + 1)
-        self.val_batches = int(self.x_val_t.shape[0] / self.bs + 1)
+        bs = self.args.batch_size
+        self.bs = {'train': self.find_bs(bs, self.x_train_t.shape[0]),
+                   'val': self.find_bs(bs, self.x_val_t.shape[0])}
+
+        print('Train batch size: ', self.bs['train'])
+        print('Validation batch size: ', self.bs['val'])
+
+        self.train_batches = int(self.x_train_t.shape[0] / self.bs['train'])
+        self.val_batches = int(self.x_val_t.shape[0] / self.bs['val'])
 
         self.x_train_t = torch.Tensor(self.x_train_t).float().cuda()
         self.x_val_t = torch.Tensor(self.x_val_t).float().cuda()

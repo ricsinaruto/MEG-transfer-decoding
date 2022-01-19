@@ -1,24 +1,28 @@
 class Loss:
     '''
     Class for accumulating and printing losses.
+    Losses are handled by a dict containing different metrics.
     '''
     def __init__(self):
-        self.list = []
-        self.list2 = []
+        self.dict = {}
 
-    def append(self, x, x2=None):
-        self.list.append(x.item())
-        if x2 is not None:
-            self.list2.append(x2.item())
+    def append(self, x):
+        for key in x:
+            if self.dict.get(key, 'no') == 'no':
+                self.dict[key] = [x[key].item()]
+            else:
+                self.dict[key].append(x[key].item())
 
-    def print(self, message):
-        loss = sum(self.list)/len(self.list)
-        if self.list2:
-            loss2 = sum(self.list2)/len(self.list2)
-            print(message, loss, ' ', loss2, flush=True)
-        else:
-            print(message, loss, flush=True)
+    def print(self, split, exception='saveloss'):
+        msg = ''
+        for k, v in self.dict.items():
+            self.dict[k] = sum(v)/len(v)
 
-        self.list = []
-        self.list2 = []
-        return loss
+            if split in k and exception not in k:
+                msg += k.split('/')[-1] + ': ' + str(self.dict[k]) + '\t'
+
+        print(msg, flush=True)
+
+        losses = dict([(k, self.dict[k]) for k in self.dict if split in k])
+        self.dict = {}
+        return losses
