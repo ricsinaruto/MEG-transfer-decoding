@@ -7,9 +7,14 @@ scripts/donders_data/*
 scripts/simulated_data/*
 scripts/mrc_data/*
 scripts/cichy_data/*
+scripts/rich_data/*
+scripts/preCompiled_edfmex
 data/*
 results/*
 tmp/*
+.ipynb_checkpoints
+.DS_Store
 *.pyc
 *.asv
 *.mat
+scripts/.DS_Store

@@ -6,7 +6,7 @@ osl_startup
 fs = 250;
 band_pass = [0.1 124.99];
 %freqs = [10 24 36 45];
-freqs = [10 14 18 22 26 33 38 45];
+%freqs = [10 14 18 22 26 33 38 45];
 %freqs = [8 11 14 17 20 23 26 29 35 38 41 45];
 time_bandwidth = 120;
 bin_width = 3;
@@ -28,18 +28,19 @@ save(strcat('simulated/8event_snr1/filtered125hz.mat'), 'X')
 
 %% Plot wavelet and welch spectra of timeseries
 figure;
-cwt(X(1, 25000:34000), fs, 'TimeBandwidth', time_bandwidth);
+cwt(squeeze(X(6, :)), fs, 'TimeBandwidth', time_bandwidth);
 for i = 1:size(freqs, 2)
     yline(freqs(i), 'white');
 end
 
+%%
 figure;
-[Xpxx, Xf] = pwelch(X(1, 1000:end), fs*2, fs, 0.01:0.1:fs*0.49, fs);
+[Xpxx, Xf] = pwelch(X(1, :), fs, fs/2, 5.0:0.1:100, fs);
 plot(Xf, Xpxx);
 for i = 1:size(freqs, 2)
     xline(freqs(i), 'red');
 end
-
+%%
 figure;
 plot(X(1, 5000:6000));
 
@@ -54,6 +55,12 @@ for i = 1:size(freqs,2)
     indices(i) = am;
 end
 
+%% get stc from amax_stc
+stc = zeros(size(amax_stc,2), size(freqs,2));
+for i = 1:size(amax_stc,2)
+    stc(i, amax_stc(1, i)+1) = 1;
+end
+
 %% Create state time course from known frequencies
 stc = abs(wavelet(indices, :))';
 
@@ -63,6 +70,7 @@ stc(stc<mean(stc)+std(stc)) = 0;
 % normalize so that individual frequency powers add up to 1
 stc = stc./(sum(stc, 2)+0.000001);
 
+%%
 figure;
 area(stc(1:9000, :));
 
@@ -70,11 +78,23 @@ area(stc(1:9000, :));
 stc(:,9) = ones(size(stc, 1), 1) * 0.01;
 [hh, amax_stc] = max(stc, [], 2);
 
+%% Set color for area plots
+figure;
+a = area(stc(15000:17000, :));
+a(1).FaceColor = [0.4, 0.0, 0.0];
+a(2).FaceColor = [0.7, 0.0, 0.0];
+a(3).FaceColor = [1.0, 0.0, 0.0];
+a(4).FaceColor = [0.0, 0.4, 0.0];
+a(5).FaceColor = [0.0, 0.7, 0.0];
+a(6).FaceColor = [0.0, 1.0, 0.0];
+a(7).FaceColor = [0.0, 0.0, 0.4];
+a(8).FaceColor = [0.0, 0.0, 0.7];
+
 %% Compute histogram of lifetimes for each state
 for i = 1:8
     index = 1;
     distro = [0];
-    for ts = 2:size(stc, 1)
+    for ts = 2:size(amax_stc, 1)
         % end
         if amax_stc(ts-1, 1) == i && amax_stc(ts, 1) ~= i
             distro(index) = ts - distro(index);
@@ -87,8 +107,11 @@ for i = 1:8
         end
     end
     
+    distro(distro>1000) = 0;
+    %distro = distro(distro>40);
     figure;
-    histogram(distro, 'BinWidth', bin_width);
+    histogram(distro, 'BinWidth', 5);
+    xlim([0, 300]);
 end
 
 %% Train hmm on the extracted frequency timeseries
