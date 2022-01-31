@@ -21,8 +21,6 @@ class Experiment:
         '''
         Initialize model and dataset using an Args object.
         '''
-        # scale epochs according to ratio of trials used
-        args.epochs = int(args.epochs * args.max_trials)
         self.args = args
         self.loss = Loss()
         self.val_losses = []
@@ -296,17 +294,32 @@ class Experiment:
 
     def lda_baseline(self):
         '''
-        Train and save any model from classifiers_linear.py
+        Train a separate linear model across time windows.
         '''
-        acc = self.model.run(self.dataset.x_train_t, self.dataset.x_val_t)
-        print(acc)
+        hw = self.args.halfwin
+        times = self.dataset.x_val_t.shape[2]
+        accs = []
 
-        with open(self.model_path, 'wb') as file:
-            pickle.dump(self.model, file)
+        for i in range(hw, times-hw):
+            # select input slice
+            x_t = self.dataset.x_train_t[:, :, i-hw:i+hw].clone()
+            x_v = self.dataset.x_val_t[:, :, i-hw:i+hw].clone()
+
+            # train model on a specific time window
+            acc = self.model.run(x_t, x_v)
+            print(acc)
+            accs.append(str(acc))
+
+            # save each model
+            with open(self.model_path + str(i), 'wb') as file:
+                pickle.dump(self.model, file)
+
+            # re-initialize model
+            self.model.init_model()
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
         with open(path, 'w') as f:
-            f.write(str(acc))
+            f.write('\n'.join(accs))
 
     def lda_eval(self):
         '''
@@ -557,6 +570,28 @@ class Experiment:
             for loss in losses:
                 f.write(str(loss) + '\n')
 
+    def PFIemb(self):
+        '''
+        Permutation Feature Importance (PFI) function for subject embeddings.
+        '''
+        loss_list = []
+        hw = self.args.halfwin
+        times = self.dataset.x_val_t.shape[2]
+
+        # slide over the epoch and always permute embeddings within a window
+        for i in range(hw-1, times-hw):
+            if i > hw-1:
+                self.model.wavenet.emb_window = (i-hw, i+hw)
+
+            losses, _, _ = self.evaluate()
+            loss = [losses[k] for k in losses if 'Validation accuracy' in k]
+            loss_list.append(str(loss[0]))
+
+        name = 'val_loss_PFIemb' + str(hw) + '.txt'
+        path = os.path.join(self.args.result_dir, name)
+        with open(path, 'w') as f:
+            f.write('\n'.join(loss_list))
+
     def PFIts(self):
         '''
         Newer Permutation Feature Importance (PFI) function for timesteps.
@@ -590,6 +625,63 @@ class Experiment:
         path = os.path.join(self.args.result_dir, 'val_loss_PFIts.txt')
         with open(path, 'w') as f:
             f.write('\n'.join(loss_list))
+
+    def PFIch(self):
+        '''
+        Newer Permutation Feature Importance (PFI) function for channels.
+        '''
+        loss_list = []
+        top_chs = self.args.closest_chs
+        val_t = self.dataset.x_val_t.clone()
+        shuffled_val_t = self.dataset.x_val_t.clone()
+        chn = val_t.shape[1] - 1
+
+        # read a file containing closest channels to each channel location
+        path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
+        with open(path, 'rb') as f:
+            closest_k = pickle.load(f)
+
+        # first permute timesteps across all channels
+        idx = np.random.rand(*val_t[:, 0, :].T.shape).argsort(0)
+        for i in range(chn):
+            a = shuffled_val_t[:, i, :].T
+            out = a[idx, np.arange(a.shape[1])].T
+            shuffled_val_t[:, i, :] = out
+
+        # evaluate without channel shuffling
+        loss, _, _ = self.evaluate()
+        loss = [loss[k] for k in loss if 'Validation acc' in k]
+        loss_list.append(str(loss[0]))
+
+        # loop over channels and permute channels in vicinity of i-th channel
+        for i in range(int(chn/3)):
+            self.dataset.x_val_t = val_t.clone()
+
+            # need to select mag and 2 grads
+            a = np.array(closest_k[i]) * 3
+            chn_idx = np.append(a+1, a+2)
+
+            # shuffle closest k channels
+            window = shuffled_val_t[:, chn_idx, :].clone()
+            self.dataset.x_val_t[:, chn_idx, :] = window
+
+            loss, _, _ = self.evaluate()
+            loss = [loss[k] for k in loss if 'Validation acc' in k]
+            loss_list.append(str(loss[0]))
+
+        # save accuracies to file
+        name = 'val_loss_PFIch' + str(top_chs) + '.txt'
+        path = os.path.join(self.args.result_dir, name)
+        with open(path, 'w') as f:
+            f.write('\n'.join(loss_list))
+
+        '''
+        # loop over permutations of other channels than i
+        # this is to improve noisy results when permuting 1 channel
+        chn_idx = np.array([c for c in range(chn) if c != i])
+        chn_idx = np.random.choice(chn_idx, size=19, replace=False)
+        chn_idx = np.append(chn_idx, i)
+        '''
 
     def freq_loss(self, generated, target):
         '''
@@ -735,6 +827,7 @@ def main(Args):
         args_pass.p_drop = checklist(args.p_drop, i)
         args_pass.learning_rate = checklist(args.learning_rate, i)
         args_pass.load_conv = checklist(args.load_conv, i)
+        args_pass.compare_model = checklist(args.compare_model, i)
 
         # skip if subject does not exist
         if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
@@ -783,5 +876,9 @@ def main(Args):
             e.window_eval()
         if Args.func['PFIts']:
             e.PFIts()
+        if Args.func['PFIch']:
+            e.PFIch()
+        if Args.func['PFIemb']:
+            e.PFIemb()
 
         e.save_embeddings()

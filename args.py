@@ -4,18 +4,11 @@ import torch.nn.functional as F
 import numpy as np
 
 from classifiers_linear import LogisticReg, LDA
-from wavenets_simple import Conv1PoolNet, ConvPoolNet
-from wavenets_simple import WavenetSimple, WavenetSimpleSembAdd, WavenetSimpleSembMult
-from wavenets_classifier import WavenetClassifier, SimpleClassifier, WavenetClassPred, SimpleClassifier0
-from wavenets_classifier import WavenetClassifierSemb
-from wavenets_full import WavenetFull, WavenetFullSimple
-from simulated_data import EventSimulation, EventSimulationQuantized
-from mrc_data import MRCData
 from cichy_data import CichyData
 
 
 class Args:
-    gpu = '0'
+    gpu = '1'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
             'LDA_baseline': True,
@@ -53,8 +46,8 @@ class Args:
         self.result_dir = [os.path.join(
             'results',
             'cichy_epoched',
-            'indiv_lda_25hz_conv80',
-            'subj' + str(i)) for i in range(15)]
+            'subj0',
+            'lda_nopca')]
         self.model = LDA
         self.dataset = CichyData
 
@@ -72,7 +65,7 @@ class Args:
         self.conv1x1_groups = 1
         self.kernel_size = 2
         self.timesteps = 1
-        self.sample_rate = 50
+        self.sample_rate = 256
         self.rf = 64
         rf = 64
         ks = self.kernel_size
@@ -84,8 +77,8 @@ class Args:
         self.load_conv = [os.path.join(
             'results',
             'cichy_epoched',
-            'indiv_simpleclasslinear_25hz',
-            'subj' + str(i), 'model.pt') for i in range(15)]
+            'subj0',
+            'simpleclasslinear', 'model.pt')]
         self.l1_loss = False
         self.pred = False
         self.alpha_norm = 0.0
@@ -95,10 +88,11 @@ class Args:
 
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
-                                 'cichy118_cont', 'preproc_data_onepass', 'lowpass25hz')
-        self.data_path = [os.path.join(data_path, 'subj' + str(i)) for i in range(15)]
+                                 'cichy118_cont', 'preproc_data_onepass', 'epoched')
+        self.data_path = [os.path.join(data_path, 'subj0')]
         self.num_channels = list(range(307))
         self.whiten = True
+        self.group_whiten = False
         self.crop = 1
         self.split = 0.2
         self.sr_data = 100
@@ -108,10 +102,12 @@ class Args:
         self.norm_path = os.path.join(data_path, 'norm_coeff')
         self.pca_path = os.path.join(data_path, 'pca128_model')
         self.load_pca = False
-        self.dump_data = [os.path.join(data_path, 'subj' + str(i), 'train_data_pca306', 'c') for i in range(15)]
+        self.dump_data = [os.path.join(data_path, 'subj0', 'train_data_whiten', 'c')]
         self.load_data = self.dump_data
 
         # analysis arguments
+        self.compare_model = False
+        self.halfwin = 10
         self.generate_noise = 1
         self.generate_length = self.sr_data * 1000
         self.generate_mode = 'IIR'

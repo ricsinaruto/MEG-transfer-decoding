@@ -890,7 +890,12 @@ class WavenetSimpleSembConcat(WavenetSimple):
     '''
     Implements simplified wavenet with concatenated subject embeddings.
     '''
+    def loaded(self, args):
+        super(WavenetSimpleSembConcat, self).loaded(args)
+        self.emb_window = False
+
     def build_model(self, args):
+        self.emb_window = False
         self.shuffle_embeddings = False
         self.inp_ch = args.num_channels + args.embedding_dim
         super(WavenetSimpleSembConcat, self).build_model(args)
@@ -899,6 +904,17 @@ class WavenetSimpleSembConcat(WavenetSimple):
         # concatenate subject embeddings with input data
         sid = sid.repeat(x.shape[2], 1).permute(1, 0)
         sid = self.subject_emb(sid).permute(0, 2, 1)
+
+        # shuffle embeddings in a window if needed
+        if self.emb_window:
+            idx = np.random.rand(*sid[:, :, 0].T.shape).argsort(0)
+            a = sid[:, :, 0].T.clone()
+            out = a[idx, np.arange(a.shape[1])].T
+
+            w = self.emb_window
+            out = out.repeat(w[1] - w[0], 1, 1)
+            sid[:, :, w[0]:w[1]] = out.permute(1, 2, 0)
+
         x = torch.cat((x, sid), dim=1)
 
         return x
@@ -913,6 +929,7 @@ class WavenetSimpleSembConcat(WavenetSimple):
     def forward(self, x, sid=torch.LongTensor([0]).cuda()):
         # shuffle embedding values if needed
         if self.shuffle_embeddings:
+            print('This code needs to be checked!')
             subid = int(sid[0].detach().cpu().numpy())
             indices = torch.randperm(self.subject_emb.weight.shape[1])
             w = self.subject_emb.weight.detach()
@@ -954,6 +971,34 @@ class WavenetSimpleSembConcat(WavenetSimple):
 
         # loop over whole network
         self.kernel_network_FIR_loop(folder, data)
+
+
+class WavenetSimpleSembNonlinear1(WavenetSimpleSembConcat):
+    def forward(self, x, sid=None):
+        '''
+        Run a forward pass through the network.
+        '''
+        x = self.embed(x, sid)
+
+        # only do nonlinear activation after first layer
+        x = torch.asinh(self.first_conv(x))
+
+        for layer in self.cnn_layers:
+            x = self.activation(self.dropout(layer(x)))
+
+        return self.last_conv(x), x
+
+
+class WavenetSimpleNonlinearSemb(WavenetSimpleSembConcat):
+    def embed(self, x, sid):
+        # concatenate subject embeddings with input data
+        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+
+        # make embedding nonlinear
+        x = torch.cat((x, torch.asinh(sid)), dim=1)
+
+        return x
 
 
 class WavenetSimpleChetSemb(WavenetSimple):

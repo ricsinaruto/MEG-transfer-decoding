@@ -6,9 +6,6 @@ import numpy as np
 
 from scipy.io import loadmat, savemat
 
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-
 from mrc_data import MRCData
 
 
@@ -22,7 +19,6 @@ class CichyData(MRCData):
         '''
         chn = args.num_channels
         num_ch = len(chn) - 1
-        args.num_channels = args.num_channels[:-1]
         x_train_ts = []
         x_val_ts = []
 
@@ -40,6 +36,8 @@ class CichyData(MRCData):
         self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
 
         # crop data
+        #tmin = args.sample_rate[0]
+        #tmax = args.sample_rate[1]
         self.x_train_t = self.x_train_t[:, :, :args.sample_rate]
         self.x_val_t = self.x_val_t[:, :, :args.sample_rate]
 
@@ -56,6 +54,27 @@ class CichyData(MRCData):
                 inds.append(i)
 
         self.x_train_t = self.x_train_t[inds, :, :]
+
+        # whiten data if needed
+        if args.group_whiten:
+            # reshape for PCA
+            x_train = self.x_train_t[:, :num_ch, :].transpose(0, 2, 1)
+            x_val = self.x_val_t[:, :num_ch, :].transpose(0, 2, 1)
+            x_train = x_train.reshape(-1, num_ch)
+            x_val = x_val.reshape(-1, num_ch)
+
+            x_train, x_val = self.whiten(x_train, x_val)
+
+            # reshape back to trials
+            x_train = x_train.reshape(-1, self.args.sample_rate, num_ch)
+            x_val = x_val.reshape(-1, self.args.sample_rate, num_ch)
+            x_train = x_train.transpose(0, 2, 1)
+            x_val = x_val.transpose(0, 2, 1)
+
+            self.x_train_t[:, :num_ch, :] = x_train
+            self.x_val_t[:, :num_ch, :] = x_val
+
+        args.num_channels = args.num_channels[:-1]
 
     def save_data(self):
         '''
@@ -126,29 +145,10 @@ class CichyData(MRCData):
             x_val = x_val.transpose(0, 1, 3, 2).reshape(-1, channels)
 
             # standardize dataset along channels
-            norm = StandardScaler()
-            norm.fit(x_train)
-            x_train = norm.transform(x_train)
-            x_val = norm.transform(x_val)
+            x_train, x_val = self.normalize(x_train, x_val)
 
-            # if needed, remove covariance with PCA
-            if args.whiten:
-                args.num_channels = list(range(args.dim_red))
-                pca = PCA(args.dim_red)
-                norm = StandardScaler()
-
-                # apply PCA
-                pca.fit(x_train)
-                x_train = pca.transform(x_train)
-                x_val = pca.transform(x_val)
-
-                # standardize output
-                norm.fit(x_train)
-                x_train = norm.transform(x_train)
-                x_val = norm.transform(x_val)
-
-            x_trains.append(x_train.T)
-            x_vals.append(x_val.T)
+            x_trains.append(x_train)
+            x_vals.append(x_val)
 
         # this is just needed to work together with other dataset classes
         disconts = [[0] for path in paths]

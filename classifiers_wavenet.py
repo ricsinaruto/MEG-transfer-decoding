@@ -39,6 +39,24 @@ class WavenetClassifier(SimpleClassifier):
         return output, x
 
 
+class WavenetClassifierClamped(WavenetClassifier):
+    def forward(self, x, sid=None):
+        # clamp weights before running forward pass
+        for layer in self.wavenet.cnn_layers:
+            layer.weight = self.clamp(layer.weight)
+            layer.bias = self.clamp(layer.bias)
+
+        for layer in self.classifier.layers:
+            layer.weight = self.clamp(layer.weight)
+            layer.bias = self.clamp(layer.bias)
+
+        return super(WavenetClassifierClamped, self).forward(x, sid)
+
+    def clamp(self, tensor):
+        tensor = torch.clamp(tensor, -0.07, 0.07)
+        return torch.nn.Parameter(tensor)
+
+
 class WavenetSkipsClassifier(WavenetClassifier):
     '''
     Adds a classifier on top of the WavenetSimpleSkips model.
@@ -188,7 +206,7 @@ class WavenetClassifierSemb(WavenetClassifier):
     Wavenet Classifier for multi-subject data using subject embeddings.
     '''
     def build_model(self, args):
-        self.wavenet = WavenetSimpleSembConcat(args)
+        self.wavenet = args.wavenet_class(args)
 
         self.class_dim = self.wavenet.ch * int(args.sample_rate/args.rf)
         self.classifier = ClassifierModule(args, self.class_dim)
@@ -269,8 +287,27 @@ class WavenetClassPred(WavenetClassifier):
 
         return output, x
 
+    def get_weights(self, grad=False):
+        '''
+        Get weights of the full wavenet+classifier modules.
+        '''
+        # use different get weight function, whether we need gradient
+        get_weight = self.wavenet.get_weight_nograd
+        if grad:
+            get_weight = self.wavenet.get_weight
+
+        # classifier weights
+        weights = [get_weight(layer) for layer in self.classifier.layers]
+
+        # wavenet weights
+        weights.extend(self.wavenet.get_weights(grad))
+
+        return weights
+
     def loaded(self, args):
         super(WavenetClassPred, self).loaded(args)
+        self.alpha = args.norm_alpha
+        self.initial_weights = self.get_weights()
 
         if args.init_model:
             self.class_dim = self.wavenet.ch * int(args.sample_rate/args.rf)
@@ -280,7 +317,6 @@ class WavenetClassPred(WavenetClassifier):
 
             # extract initial weights (trained for forecasting)
             self.initial_weights = self.wavenet.get_weights()
-            self.alpha = args.norm_alpha
 
         if args.fixed_wavenet:
             self.fix_weights()
@@ -294,7 +330,9 @@ class WavenetClassPred(WavenetClassifier):
         '''
         Compute L2 loss between new and initial weights.
         '''
-        new_weights = self.wavenet.get_weights(grad=True)
+        new_weights = self.get_weights(grad=True)
+        if self.args.init_model:
+            new_weights = self.wavenet.get_weights(grad=True)
 
         loss = []
         for nw, ow in zip(new_weights, self.initial_weights):
@@ -348,6 +386,12 @@ class WavenetClassPred(WavenetClassifier):
         for i in range(int(np.log(self.args.rf) / np.log(2))):
             d = self.layer_diff(self.wavenet.cnn_layers[i],
                                 old_model.wavenet.cnn_layers[i])
+            diffs.append(d)
+
+        # add classification weights
+        for i in range(len(self.classifier.layers)):
+            d = self.layer_diff(self.classifier.layers[i],
+                                old_model.classifier.layers[i])
             diffs.append(d)
 
         path = os.path.join(self.args.result_dir, 'layer_diff.txt')
@@ -410,7 +454,7 @@ class WavenetClassPredSemb(WavenetClassPred, WavenetClassifierSemb):
         '''
         Get subject id based on result directory name.
         '''
-        ind = int(self.args.result_dir.split('_')[-1])
+        ind = int(self.args.result_dir.split('_')[-1].split('/')[0])
         ind = self.sub_dict[ind]
 
         sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()

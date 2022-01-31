@@ -17,8 +17,7 @@ class LDA:
     '''
     def __init__(self, args):
         self.args = args
-        self.model = LinearDiscriminantAnalysis(solver='lsqr',
-                                                shrinkage='auto')
+        self.init_model()
         self.pca = PCA(args.dim_red)
         self.norm = StandardScaler()
         self.spatial_conv = torch.nn.Identity()
@@ -29,6 +28,10 @@ class LDA:
             model.loaded(args)
             model.cuda()
             self.spatial_conv = model.spatial_conv
+
+    def init_model(self):
+        self.model = LinearDiscriminantAnalysis(solver='lsqr',
+                                                shrinkage='auto')
 
     def run(self, x_train, x_val):
         '''

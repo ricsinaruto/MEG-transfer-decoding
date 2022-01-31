@@ -4,6 +4,9 @@ import numpy as np
 
 from scipy.io import loadmat
 
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
 from donders_data import DondersData
 
 
@@ -37,6 +40,42 @@ class MRCData(DondersData):
         self.x_val = np.concatenate(tuple(x_vals))
         self.x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
         self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
+
+    def whiten(self, x_train, x_val):
+        '''
+        Apply pca to training and validation data.
+        '''
+        self.args.num_channels = list(range(self.args.dim_red))
+        pca = PCA(self.args.dim_red)
+        norm = StandardScaler()
+
+        # apply PCA
+        pca.fit(x_train)
+        x_train = pca.transform(x_train)
+        x_val = pca.transform(x_val)
+
+        # standardize output
+        norm.fit(x_train)
+        x_train = norm.transform(x_train)
+        x_val = norm.transform(x_val)
+
+        return x_train, x_val
+
+    def normalize(self, x_train, x_val):
+        '''
+        Standardize and whiten data if needed.
+        '''
+        # standardize dataset along channels
+        norm = StandardScaler()
+        norm.fit(x_train)
+        x_train = norm.transform(x_train)
+        x_val = norm.transform(x_val)
+
+        # if needed, remove covariance with PCA
+        if self.args.whiten:
+            x_train, x_val = self.whiten(x_train, x_val)
+
+        return x_train.T, x_val.T
 
     def load_data(self, args):
         '''
@@ -93,11 +132,10 @@ class MRCData(DondersData):
             x_train = x_train[args.num_channels, ::resample]
 
             # create training and validation splits
-            x_val = x_train[:, :int(args.split * x_train.shape[1])]
-            x_train = x_train[:, int(args.split * x_train.shape[1]):]
+            x_val = x_train[:, :int(args.split * x_train.shape[1])].T
+            x_train = x_train[:, int(args.split * x_train.shape[1]):].T
 
-            x_train, mean, var = self.normalize(x_train)
-            x_val, _, _ = self.normalize(x_val, mean, var)
+            x_train, x_val = self.normalize(x_train, x_val)
 
             x_trains.append(x_train)
             x_vals.append(x_val)

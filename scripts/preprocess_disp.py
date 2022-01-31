@@ -6,8 +6,8 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/well/woolrich/projects/disp_csaky/subj1_pilot2/raw/"
-output_directory = "/well/woolrich/projects/disp_csaky/subj1_pilot2/preproc20hz100hz_badchan_epoched"
+dataset_path = "/well/woolrich/projects/disp_csaky/subj1/raw/"
+output_directory = "/well/woolrich/projects/disp_csaky/subj1/preproc20hz100hz_epoched"
 decim = 10
 
 config_text = """
@@ -26,7 +26,6 @@ preproc:
     - {method: bad_channels, picks: 'eeg'}
     - {method: bad_segments, segment_len: 800, picks: 'mag'}
     - {method: bad_segments, segment_len: 800, picks: 'grad'}
-    - {method: bad_segments, segment_len: 800, picks: 'eeg'}
     - {method: find_events, min_duration: 0.002}
 """
 
@@ -35,6 +34,7 @@ preproc:
     - {method: ica_autoreject, picks: 'meg', ecgmethod: 'correlation'}
 """
 
+drop_log = open(os.path.join(output_directory, 'drop_log.txt'), 'w')
 files = [f for f in os.listdir(dataset_path) if ('task' in f and 'mc.fif' in f)]
 for f in files:
     raw = mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=True)
@@ -54,7 +54,7 @@ for f in files:
                         tmin=-0.1,
                         tmax=1.6,
                         baseline=None,
-                        picks=['meg', 'eeg'],
+                        picks=['meg'],
                         reject={'grad': 0.0000000004, 'mag': 0.000000000008},
                         preload=True)
 
@@ -64,6 +64,7 @@ for f in files:
         if reason:
             if reason[0] != 'IGNORED':
                 print(reason)
+                drop_log.write(str(reason) + '\n')
 
     for epoch, event in zip(epochs, epochs.events):
         data = epoch.T.astype(np.float32)
@@ -72,3 +73,5 @@ for f in files:
         n_trials = int(len(os.listdir(f"{output_directory}/cond{event_id-2}"))/2)
         np.save(f"{output_directory}/cond{event_id-2}/trial{n_trials}.npy", data)
         savemat(f"{output_directory}/cond{event_id-2}/trial{n_trials}.mat", {'X': data})
+
+drop_log.close()
