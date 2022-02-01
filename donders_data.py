@@ -20,7 +20,9 @@ class DondersData:
         '''
         self.inds = {'train': [], 'val': []}
         self.args = args
-        self.shift = args.sample_rate - args.timesteps - args.rf + 1
+
+        sr = args.sample_rate[1] - args.sample_rate[0]
+        self.shift = sr - args.timesteps - args.rf + 1
         self.mean = None
         self.var = None
         self.sub_id = {'train': [], 'val': []}

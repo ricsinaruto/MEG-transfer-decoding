@@ -36,10 +36,12 @@ class CichyData(MRCData):
         self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
 
         # crop data
-        #tmin = args.sample_rate[0]
-        #tmax = args.sample_rate[1]
-        self.x_train_t = self.x_train_t[:, :, :args.sample_rate]
-        self.x_val_t = self.x_val_t[:, :, :args.sample_rate]
+        tmin = args.sample_rate[0]
+        tmax = args.sample_rate[1]
+        self.x_train_t = self.x_train_t[:, :, tmin:tmax]
+        self.x_val_t = self.x_val_t[:, :, tmin:tmax]
+
+        args.sample_rate = tmax - tmin
 
         # select a subset of training trials
         num_trials = np.sum(self.x_train_t[:, num_ch, 0] == 0.0)

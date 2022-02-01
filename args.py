@@ -4,14 +4,20 @@ import torch.nn.functional as F
 import numpy as np
 
 from classifiers_linear import LogisticReg, LDA
+from wavenets_simple import Conv1PoolNet, ConvPoolNet
+from wavenets_simple import WavenetSimple, WavenetSimpleSembAdd, WavenetSimpleSembMult
+from classifiers_wavenet import WavenetClassifier
+from wavenets_full import WavenetFull, WavenetFullSimple
+from simulated_data import EventSimulation, EventSimulationQuantized
+from mrc_data import MRCData
 from cichy_data import CichyData
 
 
 class Args:
-    gpu = '1'
+    gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'LDA_baseline': True,
+            'LDA_baseline': False,
             'train': False,
             'generate': False,
             'recursive': False,
@@ -23,11 +29,12 @@ class Args:
             'save_validation_ch': False,
             'save_validation_subs': False,
             'pca_sensor_loss': False,
+            'PFIts': False,
+            'PFIch': True,
             'compare_layers': False,
             'test': False,
-            'window_eval': False,
             'LDA_eval': False,
-            'PFIts': False}
+            'window_eval': False}
 
     def __init__(self):
         # training arguments
@@ -35,20 +42,25 @@ class Args:
         self.load_dataset = True
         self.learning_rate = 0.00005
         self.max_trials = 1
-        self.batch_size = 59
-        self.epochs = 2000
+        self.batch_size = 590
+        self.epochs = 500
         self.val_freq = 20
         self.print_freq = 5
         self.num_plot = 1
         self.plot_ch = 1
         self.save_curves = True
-        self.load_model = False
+        self.load_model = [os.path.join(
+            'results',
+            'cichy_epoched',
+            'indiv_wavenetlinear_MNN',
+            'subj0')]
         self.result_dir = [os.path.join(
             'results',
             'cichy_epoched',
+            'indiv_wavenetlinear_MNN',
             'subj0',
-            'lda_nopca')]
-        self.model = LDA
+            'PFIch_inverse')]
+        self.model = WavenetClassifier
         self.dataset = CichyData
 
         # wavenet arguments
@@ -57,7 +69,7 @@ class Args:
         self.subjects = 0
         self.embedding_dim = 0
         self.num_samples_CPC = 20
-        self.p_drop = 0.6
+        self.p_drop = 0.7
         self.k_CPC = 1
         self.mu = 255
         self.ch_mult = 2
@@ -65,25 +77,21 @@ class Args:
         self.conv1x1_groups = 1
         self.kernel_size = 2
         self.timesteps = 1
-        self.sample_rate = 256
-        self.rf = 64
-        rf = 64
+        self.sample_rate = [0, 256]
+        self.rf = 8
+        rf = 8
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
         self.dilations = [ks**i for i in range(nl)]  # wavenet mode
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
-        self.load_conv = [os.path.join(
-            'results',
-            'cichy_epoched',
-            'subj0',
-            'simpleclasslinear', 'model.pt')]
+        self.load_conv = False
         self.l1_loss = False
         self.pred = False
         self.alpha_norm = 0.0
         self.num_classes = 118
-        self.units = [1000, 300]
+        self.units = [1000, 400]
         self.dim_red = 80
 
         # dataset arguments
@@ -91,11 +99,11 @@ class Args:
                                  'cichy118_cont', 'preproc_data_onepass', 'epoched')
         self.data_path = [os.path.join(data_path, 'subj0')]
         self.num_channels = list(range(307))
-        self.whiten = True
-        self.group_whiten = False
         self.crop = 1
+        self.whiten = False
+        self.group_whiten = False
         self.split = 0.2
-        self.sr_data = 100
+        self.sr_data = 250
         self.num_components = 0
         self.resample = 7
         self.save_norm = True
@@ -106,8 +114,11 @@ class Args:
         self.load_data = self.dump_data
 
         # analysis arguments
-        self.compare_model = False
+        self.closest_chs = 20
+        self.PFI_inverse = True
+        self.pfich_timesteps = [0, 256]
         self.halfwin = 10
+        self.compare_model = False
         self.generate_noise = 1
         self.generate_length = self.sr_data * 1000
         self.generate_mode = 'IIR'
@@ -140,7 +151,7 @@ class Args:
         self.uni = False
         self.save_AR = False
         self.do_anal = False
-        self.AR_load_path = os.path.join(
+        self.AR_load_path = [os.path.join(
             'results',
             'mrc',
-            '60subjects_notch_sensors_multiAR64')
+            '60subjects_notch_sensors_multiAR64')]

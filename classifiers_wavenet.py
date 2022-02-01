@@ -313,8 +313,6 @@ class WavenetClassPred(WavenetClassifier):
             self.class_dim = self.wavenet.ch * int(args.sample_rate/args.rf)
             self.classifier = ClassifierModule(args, self.class_dim)
 
-            self.wavenet.dropout = Dropout2d(args.p_drop)
-
             # extract initial weights (trained for forecasting)
             self.initial_weights = self.wavenet.get_weights()
 

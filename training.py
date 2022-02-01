@@ -302,11 +302,11 @@ class Experiment:
 
         for i in range(hw, times-hw):
             # select input slice
-            x_t = self.dataset.x_train_t[:, :, i-hw:i+hw].clone()
-            x_v = self.dataset.x_val_t[:, :, i-hw:i+hw].clone()
+            x_t = self.dataset.x_train_t.clone()
+            x_v = self.dataset.x_val_t.clone()
 
             # train model on a specific time window
-            acc = self.model.run(x_t, x_v)
+            acc = self.model.run(x_t, x_v, (i-hw, i+hw))
             print(acc)
             accs.append(str(acc))
 
@@ -615,8 +615,15 @@ class Experiment:
         for i in range(hw, times-hw):
             self.dataset.x_val_t = val_t.clone()
             if i > 0:
-                window = shuffled_val_t[:, :chn, i-hw:i+hw].clone()
-                self.dataset.x_val_t[:, :chn, i-hw:i+hw] = window
+                # either permute inside or outside the window
+                if self.args.PFI_inverse:
+                    window = shuffled_val_t[:, :chn, :i-hw].clone()
+                    self.dataset.x_val_t[:, :chn, :i-hw] = window
+                    window = shuffled_val_t[:, :chn, i+hw:].clone()
+                    self.dataset.x_val_t[:, :chn, i+hw:] = window
+                else:
+                    window = shuffled_val_t[:, :chn, i-hw:i+hw].clone()
+                    self.dataset.x_val_t[:, :chn, i-hw:i+hw] = window
 
             losses, _, _ = self.evaluate()
             loss = [losses[k] for k in losses if 'Validation accuracy' in k]
@@ -635,6 +642,8 @@ class Experiment:
         val_t = self.dataset.x_val_t.clone()
         shuffled_val_t = self.dataset.x_val_t.clone()
         chn = val_t.shape[1] - 1
+        tmin = self.args.pfich_timesteps[0]
+        tmax = self.args.pfich_timesteps[1]
 
         # read a file containing closest channels to each channel location
         path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
@@ -659,11 +668,18 @@ class Experiment:
 
             # need to select mag and 2 grads
             a = np.array(closest_k[i]) * 3
-            chn_idx = np.append(a+1, a+2)
+            chn_idx = np.append(np.append(a, a+1), a+2)
 
             # shuffle closest k channels
-            window = shuffled_val_t[:, chn_idx, :].clone()
-            self.dataset.x_val_t[:, chn_idx, :] = window
+            if self.args.PFI_inverse:
+                mask = np.ones(chn+1, np.bool)
+                mask[chn_idx] = 0
+                mask[chn] = 0
+                window = shuffled_val_t[:, mask, tmin:tmax].clone()
+                self.dataset.x_val_t[:, mask, tmin:tmax] = window
+            else:
+                window = shuffled_val_t[:, chn_idx, tmin:tmax].clone()
+                self.dataset.x_val_t[:, chn_idx, tmin:tmax] = window
 
             loss, _, _ = self.evaluate()
             loss = [loss[k] for k in loss if 'Validation acc' in k]

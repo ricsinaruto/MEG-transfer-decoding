@@ -18,6 +18,7 @@ class LDA:
     def __init__(self, args):
         self.args = args
         self.init_model()
+        self.fit_pca = True
         self.pca = PCA(args.dim_red)
         self.norm = StandardScaler()
         self.spatial_conv = torch.nn.Identity()
@@ -32,11 +33,20 @@ class LDA:
     def init_model(self):
         self.model = LinearDiscriminantAnalysis(solver='lsqr',
                                                 shrinkage='auto')
+        self.fit_pca = False
 
-    def run(self, x_train, x_val):
+    def crop(self, xt, xv):
+        xt = xt[:, :, self.window[0]:self.self.window[1]]
+        xv = xv[:, :, self.window[0]:self.self.window[1]]
+
+        return xt, xv
+
+    def run(self, x_train, x_val, window=None):
         '''
         Transform data, then train and evaluate LDA.
         '''
+        self.window = window
+        x_train, x_val = self.crop(x_train, x_val)
         x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val)
 
         # fit LDA
@@ -57,12 +67,14 @@ class LDA:
 
         # apply PCA if not using convolutional layer
         if not self.args.load_conv:
-            self.pca.fit(x_train)
+            if self.fit_pca:
+                self.pca.fit(x_train)
             x_train = self.pca.transform(x_train)
             x_val = self.pca.transform(x_val)
 
             # standardize the output of PCA
-            self.norm.fit(x_train)
+            if self.fit_pca:
+                self.norm.fit(x_train)
             x_train = self.norm.transform(x_train)
             x_val = self.norm.transform(x_val)
 
@@ -115,6 +127,9 @@ class LDA_wavelet(LDA):
     '''
     LDA model trained on wavelet transformed data.
     '''
+    def crop(self, xt, xv):
+        return xt, xv
+
     def prep_lda(self, data):
         '''
         Apply wavelet transform when preparing data.
@@ -130,6 +145,8 @@ class LDA_wavelet(LDA):
                                 sfreq=self.args.sr_data,
                                 freqs=freqs,
                                 n_cycles=n_cycles)
+        # select small window
+        data = data[:, :, :, self.window[0]:self.window[1]]
 
         data = data.reshape(data.shape[0], -1)
         data = np.append(data.real, data.imag, axis=1)
