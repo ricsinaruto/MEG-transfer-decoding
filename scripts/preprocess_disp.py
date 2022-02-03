@@ -6,8 +6,8 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/well/woolrich/projects/disp_csaky/subj1/raw/"
-output_directory = "/well/woolrich/projects/disp_csaky/subj1/preproc20hz100hz_epoched"
+dataset_path = "/Users/ricsi/Documents/GitHub/MEG-transfer-decoding/scripts/rich_data/subj1/maxfiltered/"
+output_directory = "/Users/ricsi/Documents/GitHub/MEG-transfer-decoding/scripts/rich_data/subj1/preproc25hz_epoched_meg"
 decim = 10
 
 config_text = """
@@ -19,7 +19,7 @@ meta:
         words/toilet: 5
         words/pain: 6
 preproc:
-    - {method: filter, l_freq: 0.1, h_freq: 20}
+    - {method: filter, l_freq: 0.1, h_freq: 25}
     - {method: notch_filter, freqs: 50 100}
     - {method: bad_channels, picks: 'mag'}
     - {method: bad_channels, picks: 'grad'}
@@ -49,9 +49,8 @@ for f in files:
 
     epochs = mne.Epochs(raw,
                         dataset['events'],
-                        decim=decim,
                         event_id=dataset['event_id'],
-                        tmin=-0.1,
+                        tmin=-0.4,
                         tmax=1.6,
                         baseline=None,
                         picks=['meg'],

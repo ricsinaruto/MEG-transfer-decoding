@@ -926,7 +926,10 @@ class WavenetSimpleSembConcat(WavenetSimple):
 
         return weights
 
-    def forward(self, x, sid=torch.LongTensor([0]).cuda()):
+    def forward(self, x, sid=None):
+        if sid is None:
+            torch.LongTensor([0]).cuda()
+
         # shuffle embedding values if needed
         if self.shuffle_embeddings:
             print('This code needs to be checked!')
@@ -939,7 +942,10 @@ class WavenetSimpleSembConcat(WavenetSimple):
         x = self.embed(x, sid)
         return super(WavenetSimpleSembConcat, self).forward(x)
 
-    def forward4(self, x, sid=torch.LongTensor([0]).cuda()):
+    def forward4(self, x, sid=None):
+        if sid is None:
+            torch.LongTensor([0]).cuda()
+
         x = self.embed(x, sid)
         return super(WavenetSimpleSembConcat, self).forward4(x)
 

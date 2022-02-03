@@ -10,6 +10,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
+from scipy import signal
+
 
 class LDA:
     '''
@@ -35,18 +37,11 @@ class LDA:
                                                 shrinkage='auto')
         self.fit_pca = False
 
-    def crop(self, xt, xv):
-        xt = xt[:, :, self.window[0]:self.self.window[1]]
-        xv = xv[:, :, self.window[0]:self.self.window[1]]
-
-        return xt, xv
-
     def run(self, x_train, x_val, window=None):
         '''
         Transform data, then train and evaluate LDA.
         '''
         self.window = window
-        x_train, x_val = self.crop(x_train, x_val)
         x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val)
 
         # fit LDA
@@ -118,6 +113,7 @@ class LDA:
         Reshape data for LDA.
         '''
         data = data.reshape(-1, self.ts, data.shape[1])
+        data = data[:, self.window[0]:self.window[1], :]
         data = data.reshape(data.shape[0], -1)
 
         return data
@@ -127,17 +123,32 @@ class LDA_wavelet(LDA):
     '''
     LDA model trained on wavelet transformed data.
     '''
-    def crop(self, xt, xv):
-        return xt, xv
-
     def prep_lda(self, data):
         '''
         Apply wavelet transform when preparing data.
         '''
+        hw = self.args.halfwin
         data = data.reshape(-1, self.ts, data.shape[1])
         data = data.transpose(0, 2, 1)
 
+        # STFT
+        trials = data.shape[0]
+        data = data.reshape(-1, data.shape[2])
+
+        window = torch.hamming_window(2*hw)
+        data = torch.stft(torch.Tensor(data),
+                          n_fft=2*hw,
+                          hop_length=1,
+                          window=window,
+                          center=False,
+                          return_complex=False)
+        data = data.numpy()
+        data = data.transpose(0, 2, 1, 3)
+        data = data.reshape(data.shape[0], data.shape[1], -1)
+        data = data.reshape(trials, -1, data.shape[1], data.shape[2])
+
         # morlet wavelet
+        '''
         freqs = np.logspace(*np.log10([2, 40]), num=5)
         n_cycles = freqs / 4.
 
@@ -145,11 +156,11 @@ class LDA_wavelet(LDA):
                                 sfreq=self.args.sr_data,
                                 freqs=freqs,
                                 n_cycles=n_cycles)
+        '''
         # select small window
-        data = data[:, :, :, self.window[0]:self.window[1]]
+        data = data[:, :, self.window[0], :].reshape(trials, -1)
 
-        data = data.reshape(data.shape[0], -1)
-        data = np.append(data.real, data.imag, axis=1)
+        #data = np.append(data.real, data.imag, axis=1)
         print('Data shape: ', data.shape)
 
         return data

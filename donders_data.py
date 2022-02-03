@@ -204,10 +204,17 @@ class DondersData:
         self.train_batches = int(self.x_train_t.shape[0] / self.bs['train'])
         self.val_batches = int(self.x_val_t.shape[0] / self.bs['val'])
 
-        self.x_train_t = torch.Tensor(self.x_train_t).float().cuda()
-        self.x_val_t = torch.Tensor(self.x_val_t).float().cuda()
-        self.sub_id['train'] = torch.LongTensor(self.sub_id['train']).cuda()
-        self.sub_id['val'] = torch.LongTensor(self.sub_id['val']).cuda()
+        try:
+            self.x_train_t = torch.Tensor(self.x_train_t).float().cuda()
+            self.x_val_t = torch.Tensor(self.x_val_t).float().cuda()
+            self.sub_id['train'] = torch.LongTensor(self.sub_id['train']).cuda()
+            self.sub_id['val'] = torch.LongTensor(self.sub_id['val']).cuda()
+        except:
+            self.x_train_t = torch.Tensor(self.x_train_t).float()
+            self.x_val_t = torch.Tensor(self.x_val_t).float()
+            self.sub_id['train'] = torch.LongTensor(self.sub_id['train'])
+            self.sub_id['val'] = torch.LongTensor(self.sub_id['val'])
+
         self.sub_id['train'] = self.sub_id['train'].reshape(-1)
         self.sub_id['val'] = self.sub_id['val'].reshape(-1)
 

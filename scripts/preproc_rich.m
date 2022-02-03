@@ -1,10 +1,10 @@
 %% 1. Set parameters and import data
 high_pass = 0.1;  % high pass frequency
 low_pass = 124.999;  % low pass frequency
-data_dir = 'rich_data/cam/';
+data_dir = 'rich_data/subj1/';
 fif = strcat(data_dir, 'RC_task.fif');
 
-matlabbatch{1}.spm.meeg.convert.dataset = {'/Users/ricsi/Documents/GitHub/MEG-transfer-decoding/scripts/rich_data/cam/read_and_repeat_task_tsss.fif'};
+matlabbatch{1}.spm.meeg.convert.dataset = {'/Users/ricsi/Documents/GitHub/MEG-transfer-decoding/scripts/rich_data/subj1/sess4/task_part1_4_raw_tsss_mc.fif'};
 matlabbatch{1}.spm.meeg.convert.mode.continuous.readall = 1;
 matlabbatch{1}.spm.meeg.convert.channels{1}.all = 'all';
 matlabbatch{1}.spm.meeg.convert.outfile = '';
@@ -15,7 +15,7 @@ matlabbatch{1}.spm.meeg.convert.saveorigheader = 0;
 matlabbatch{1}.spm.meeg.convert.inputformat = 'autodetect';
 
 %% Load D object
-D = spm_eeg_load('spmeeg_think_task_tsss');
+D = spm_eeg_load('/Users/ricsi/Documents/GitHub/MEG-transfer-decoding/scripts/rich_data/subj1/sess4/task_part1_4_raw_tsss_mc');
 
 
 %% bandpass filter

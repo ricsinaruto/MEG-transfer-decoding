@@ -18,3 +18,11 @@ tmp/*
 *.asv
 *.mat
 scripts/.DS_Store
+scripts/cichy_data.py
+scripts/classifiers_simpleNN.py
+scripts/classifiers_wavenet.py
+scripts/donders_data.py
+scripts/mrc_data.py
+scripts/wavenets_classifier.py
+scripts/wavenets_full.py
+scripts/wavenets_simple.py

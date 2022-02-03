@@ -108,7 +108,7 @@ class CichyData(MRCData):
         x_vals = []
         for path in paths:
             print('Loading ', path)
-            min_trials = 100
+            min_trials = 1000000
             dataset = []
 
             # loop over 118 conditions
