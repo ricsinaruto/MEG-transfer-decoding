@@ -14,6 +14,7 @@ from torch.nn import MSELoss
 from torch.optim import Adam
 
 from loss import Loss
+from classifiers_linear import LDA
 
 
 class Experiment:
@@ -28,12 +29,13 @@ class Experiment:
 
         # create folder for results
         if os.path.isdir(self.args.result_dir):
-            print('Result already directory exists, writing to it.')
-            print(self.args.result_dir)
+            print('Result already directory exists, writing to it.',
+                  flush=True)
+            print(self.args.result_dir, flush=True)
         else:
             os.mkdir(self.args.result_dir)
-            print('New result directory created.')
-            print(self.args.result_dir)
+            print('New result directory created.', flush=True)
+            print(self.args.result_dir, flush=True)
 
         # save args object
         path = os.path.join(self.args.result_dir, 'args_saved.py')
@@ -42,22 +44,30 @@ class Experiment:
         # initialize dataset
         if args.load_dataset:
             self.dataset = args.dataset(args)
-            print('Dataset initialized.')
+            print('Dataset initialized.', flush=True)
 
         # load model if path is specified
         if args.load_model:
             self.model_path = os.path.join(args.load_model, 'model.pt')
-            self.model = torch.load(self.model_path)
+
+            # LDA vs deep learning models
+            try:
+                self.model = torch.load(self.model_path)
+                self.model.loaded(args)
+                self.model.cuda()
+            except:
+                self.model = pickle.load(open(self.model_path, 'rb'))
+                self.model.loaded(args)
+
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-            self.model.loaded(args)
-            self.model.cuda()
-            print('Model loaded from file.')
+
+            print('Model loaded from file.', flush=True)
             #self.args.dataset = self.dataset
         else:
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
             try:
                 self.model = self.args.model(self.args).cuda()
-                print('Model initialized with cuda.')
+                print('Model initialized with cuda.', flush=True)
             except:  # if cuda not available or not cuda model
                 self.model = self.args.model(self.args)
                 print('Model initialized without cuda.')
@@ -67,7 +77,7 @@ class Experiment:
             parameters = [param.numel() for param in self.model.parameters()]
             print('Number of parameters: ', sum(parameters), flush=True)
         except:
-            print('Can\'t calculate number of parameters.')
+            print('Can\'t calculate number of parameters.', flush=True)
 
     def train(self):
         '''
@@ -90,7 +100,7 @@ class Experiment:
             if epoch == 0:
                 path = os.path.join(self.args.result_dir, 'model_init.pt')
                 torch.save(self.model, path, pickle_protocol=4)
-                print('Model saved to result directory.')
+                print('Model saved to result directory.', flush=True)
 
             # loop over batches
             for i in range(self.dataset.train_batches):
@@ -128,7 +138,7 @@ class Experiment:
                 if loss[0] < best_val:
                     best_val = loss[0]
                     torch.save(self.model, self.model_path, pickle_protocol=4)
-                    print('Validation loss improved, model saved.')
+                    print('Validation loss improved, model saved.', flush=True)
 
                 # save loss plots if needed
                 if self.args.save_curves:
@@ -592,6 +602,14 @@ class Experiment:
         with open(path, 'w') as f:
             f.write('\n'.join(loss_list))
 
+    def evaluate_(self, data):
+        losses, _, _ = self.evaluate()
+        loss = [losses[k] for k in losses if 'Validation accuracy' in k]
+        return loss[0]
+
+    def LDA_eval_(self, data):
+        return self.model.eval(data)
+
     def PFIts(self):
         '''
         Newer Permutation Feature Importance (PFI) function for timesteps.
@@ -603,6 +621,10 @@ class Experiment:
         shuffled_val_t = self.dataset.x_val_t.clone()
         chn = val_t.shape[1] - 1
         times = val_t.shape[2]
+
+        # whether dealing with LDA or deep learning models
+        lda_or_not = isinstance(self.model, LDA)
+        val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
 
         # first permute channels across all timesteps
         idx = np.random.rand(*val_t[:, :chn, 0].T.shape).argsort(0)
@@ -625,9 +647,8 @@ class Experiment:
                     window = shuffled_val_t[:, :chn, i-hw:i+hw].clone()
                     self.dataset.x_val_t[:, :chn, i-hw:i+hw] = window
 
-            losses, _, _ = self.evaluate()
-            loss = [losses[k] for k in losses if 'Validation accuracy' in k]
-            loss_list.append(str(loss[0]))
+            loss = val_func(self.dataset.x_val_t)
+            loss_list.append(str(loss))
 
         path = os.path.join(self.args.result_dir, 'val_loss_PFIts.txt')
         with open(path, 'w') as f:

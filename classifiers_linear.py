@@ -10,8 +10,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-from scipy import signal
-
 
 class LDA:
     '''
@@ -36,6 +34,9 @@ class LDA:
         self.model = LinearDiscriminantAnalysis(solver='lsqr',
                                                 shrinkage='auto')
         self.fit_pca = False
+
+    def loaded(self, args):
+        self.args = args
 
     def run(self, x_train, x_val, window=None):
         '''
@@ -79,10 +80,11 @@ class LDA:
 
         return x_train, x_val, y_train, y_val
 
-    def eval(self, x_val):
+    def eval(self, x_val, window=None):
         '''
         Evaluate an already trained LDA model.
         '''
+        self.window = window
         x_val, y_val = self.prepare(x_val)
 
         if not self.args.load_conv:
@@ -113,7 +115,9 @@ class LDA:
         Reshape data for LDA.
         '''
         data = data.reshape(-1, self.ts, data.shape[1])
-        data = data[:, self.window[0]:self.window[1], :]
+
+        if self.window is not None:
+            data = data[:, self.window[0]:self.window[1], :]
         data = data.reshape(data.shape[0], -1)
 
         return data

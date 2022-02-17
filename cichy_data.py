@@ -107,7 +107,7 @@ class CichyData(MRCData):
         x_trains = []
         x_vals = []
         for path in paths:
-            print('Loading ', path)
+            print('Loading ', path, flush=True)
             min_trials = 1000000
             dataset = []
 
@@ -128,7 +128,7 @@ class CichyData(MRCData):
                 dataset.append(np.array(trials))
 
             # condition with lowest number of trials
-            print('Minimum trials: ', min_trials)
+            print('Minimum trials: ', min_trials, flush=True)
 
             # dataset shape: conditions x trials x channels x timesteps
             dataset = np.array([t[:min_trials, :, :] for t in dataset])
@@ -142,6 +142,10 @@ class CichyData(MRCData):
             split = int(args.split * min_trials)
             x_val = dataset[:, :split, :, :]
             x_train = dataset[:, split:, :, :]
+
+            # crop training trials
+            max_trials = round(args.max_trials * x_train.shape[1])
+            x_train = x_train[:, :max_trials, :, :]
 
             x_train = x_train.transpose(0, 1, 3, 2).reshape(-1, channels)
             x_val = x_val.transpose(0, 1, 3, 2).reshape(-1, channels)

@@ -130,9 +130,10 @@ class DondersData:
         self.x_val_t = val_ep[shuffled, :, :]
         self.sub_id['val'] = np.array(self.sub_id['val'])[shuffled]
 
-        print('Good samples: ', sum([x.shape[1] for x in x_trains + x_vals]))
+        print('Good samples: ', sum([x.shape[1] for x in x_trains + x_vals]),
+              flush=True)
         print('Extracted samples: ',
-              (train_ep.shape[0] + val_ep.shape[0]) * self.shift)
+              (train_ep.shape[0] + val_ep.shape[0]) * self.shift, flush=True)
 
         if not os.path.isdir(os.path.split(args.dump_data)[0]):
             os.mkdir(os.path.split(args.dump_data)[0])
@@ -217,6 +218,10 @@ class DondersData:
 
         self.sub_id['train'] = self.sub_id['train'].reshape(-1)
         self.sub_id['val'] = self.sub_id['val'].reshape(-1)
+
+        if isinstance(self.args.sample_rate, list):
+            w = self.args.sample_rate[1] - self.args.sample_rate[0]
+            self.args.sample_rate = w
 
     def normalize(self, x, mean=None, var=None):
         '''

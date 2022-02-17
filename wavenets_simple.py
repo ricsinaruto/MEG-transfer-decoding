@@ -102,8 +102,13 @@ class WavenetSimple(Module):
         '''
         Applies 2D dropout to 1D data by unsqueezeing.
         '''
-        x = torch.unsqueeze(x, 3)
-        return torch.squeeze(self.dropout2d(x))
+        if self.args.dropout2d_bad:
+            x = self.dropout2d(x)
+        else:
+            x = torch.unsqueeze(x, 3)
+            x = torch.squeeze(self.dropout2d(x))
+
+        return x
 
     def forward4(self, x, sid=None):
         '''

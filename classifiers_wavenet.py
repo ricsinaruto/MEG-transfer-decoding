@@ -2,7 +2,7 @@ import numpy as np
 import os
 import torch
 
-from torch.nn import Dropout2d, Conv1d, Embedding
+from torch.nn import Conv1d, Embedding
 
 from wavenets_simple import WavenetSimple, WavenetSimpleSTS
 from wavenets_simple import WavenetSimpleSembConcat, WavenetSimpleSembAdd
