@@ -17,7 +17,8 @@ class Args:
     gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'LDA_baseline': True,
+            'LDA_baseline': False,
+            'LDA_pairwise': True,
             'train': False,
             'generate': False,
             'recursive': False,
@@ -54,8 +55,8 @@ class Args:
             'results',
             'disp_epoched',
             'subj1',
-            'LDA_stft')]
-        self.model = LDA_wavelet
+            'standardized_LDA_full_pairwise')]
+        self.model = LDA
         self.dataset = CichyData
 
         # wavenet arguments
@@ -72,7 +73,7 @@ class Args:
         self.conv1x1_groups = 1
         self.kernel_size = 2
         self.timesteps = 1
-        self.sample_rate = [0, 200]
+        self.sample_rate = [40, 141]
         self.rf = 8
         rf = 8
         ks = self.kernel_size
@@ -92,7 +93,7 @@ class Args:
         # dataset arguments
         data_path = os.path.join('/', 'Users', 'ricsi', 'Documents', 'GitHub',
                                  'MEG-transfer-decoding', 'scripts', 'rich_data',
-                                 'subj1', 'preproc25hz_epoched_meg')
+                                 'subj1', 'preproc25hz_standardized_meg')
         self.data_path = [data_path]
         self.num_channels = list(range(307))
         self.crop = 1
@@ -113,7 +114,7 @@ class Args:
         self.closest_chs = 20
         self.PFI_inverse = True
         self.pfich_timesteps = [0, 256]
-        self.halfwin = 5
+        self.halfwin = 50
         self.compare_model = False
         self.generate_noise = 1
         self.generate_length = self.sr_data * 1000
