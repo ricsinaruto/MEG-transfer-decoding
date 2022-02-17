@@ -321,6 +321,47 @@ class Experiment:
         with open(path, 'w') as f:
             f.write('\n'.join(accs))
 
+        return accs
+
+    def lda_pairwise(self):
+        '''
+        Train LDA for pairwise classification.
+        '''
+        accuracies = []
+        nc = self.args.num_classes
+        chn = self.args.num_channels - 1
+        x_t = self.dataset.x_train_t.clone()
+        x_v = self.dataset.x_val_t.clone()
+
+        # do a first pass to fit PCA
+        self.lda_baseline()
+
+        for c1 in range(nc):
+            for c2 in range(c1+1, nc):
+                # set labels for pairwise classification
+                self.dataset.x_train_t = x_t.clone()
+                self.dataset.x_train_t[x_t[:, chn, 0] == c1, chn, :] = 0
+                self.dataset.x_train_t[x_t[:, chn, 0] == c2, chn, :] = 1
+
+                # select trials from these 2 classes
+                inds = x_t[:, chn, 0] == c1 or x_t[:, chn, 0] == c2
+                self.dataset.x_train_t = self.dataset.x_train_t[inds, :, :]
+
+                # repeat for validation data
+                self.dataset.x_val_t = x_v.clone()
+                self.dataset.x_val_t[x_v[:, chn, 0] == c1, chn, :] = 0
+                self.dataset.x_val_t[x_v[:, chn, 0] == c2, chn, :] = 1
+
+                inds = x_v[:, chn, 0] == c1 or x_v[:, chn, 0] == c2
+                self.dataset.x_val_t = self.dataset.x_val_t[inds, :, :]
+
+                accs = self.lda_baseline()
+                accuracies.append(accs)
+
+        path = os.path.join(self.args.result_dir, 'val_loss.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(accuracies))
+
     def lda_eval(self):
         '''
         Evaluate any linear classifier on each subject separately.
@@ -860,6 +901,8 @@ def main(Args):
             e.AR_baseline()
         if Args.func['LDA_baseline']:
             e.lda_baseline()
+        if Args.func['LDA_pairwise']:
+            e.lda_pairwise()
         if Args.func['train']:
             e.train()
         if Args.func['analyse_kernels']:
