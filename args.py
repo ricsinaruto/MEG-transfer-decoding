@@ -3,22 +3,18 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from classifiers_linear import LogisticReg, LDA, LDA_wavelet
-from wavenets_simple import Conv1PoolNet, ConvPoolNet
-from wavenets_simple import WavenetSimple, WavenetSimpleSembAdd, WavenetSimpleSembMult
+from classifiers_simpleNN import SimpleClassifier
 from classifiers_wavenet import WavenetClassifier
-from wavenets_full import WavenetFull, WavenetFullSimple
-from simulated_data import EventSimulation, EventSimulationQuantized
-from mrc_data import MRCData
+from classifiers_linear import LDA
 from cichy_data import CichyData
 
 
 class Args:
-    gpu = '0'
+    gpu = '1'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
             'LDA_baseline': False,
-            'LDA_pairwise': True,
+            'LDA_pairwise': False,
             'train': False,
             'generate': False,
             'recursive': False,
@@ -32,6 +28,7 @@ class Args:
             'pca_sensor_loss': False,
             'PFIts': False,
             'PFIch': False,
+            'PFIemb': False,
             'compare_layers': False,
             'test': False,
             'LDA_eval': False,
@@ -41,10 +38,10 @@ class Args:
         # training arguments
         self.name = 'args.py'
         self.load_dataset = True
-        self.learning_rate = 0.00005
+        self.learning_rate = 0.00001
         self.max_trials = 1
-        self.batch_size = 590
-        self.epochs = 500
+        self.batch_size = 59
+        self.epochs = 100
         self.val_freq = 20
         self.print_freq = 5
         self.num_plot = 1
@@ -55,8 +52,9 @@ class Args:
             'results',
             'disp_epoched',
             'subj1',
-            'standardized_LDA_full_pairwise')]
-        self.model = LDA
+            'ica_simpleclass',
+            'crossval' + str(i)) for i in range(5)]
+        self.model = SimpleClassifier
         self.dataset = CichyData
 
         # wavenet arguments
@@ -65,7 +63,8 @@ class Args:
         self.subjects = 0
         self.embedding_dim = 0
         self.num_samples_CPC = 20
-        self.p_drop = 0.7
+        self.p_drop = 0.6
+        self.dropout2d_bad = False
         self.k_CPC = 1
         self.mu = 255
         self.ch_mult = 2
@@ -82,24 +81,33 @@ class Args:
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
-        self.load_conv = False
+        self.load_conv = os.path.join(
+            'results',
+            'disp_epoched',
+            'subj1',
+            'ica_simpleclass',
+            'model.pt')
         self.l1_loss = False
         self.pred = False
         self.alpha_norm = 0.0
         self.num_classes = 5
-        self.units = [1000, 400]
+        self.units = [800, 300]
         self.dim_red = 80
 
         # dataset arguments
-        data_path = os.path.join('/', 'Users', 'ricsi', 'Documents', 'GitHub',
-                                 'MEG-transfer-decoding', 'scripts', 'rich_data',
-                                 'subj1', 'preproc25hz_standardized_meg')
+        data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
+                                 'disp_csaky',
+                                 'subj1', 'preproc25hz_ica_meg')
         self.data_path = [data_path]
-        self.num_channels = list(range(307))
+        self.num_channels = list(range(306))
         self.crop = 1
-        self.whiten = True
+        self.whiten = False
         self.group_whiten = False
-        self.split = 0.2
+        self.split = [np.array([0.0, 0.2]),
+                      np.array([0.2, 0.4]),
+                      np.array([0.4, 0.6]),
+                      np.array([0.6, 0.8]),
+                      np.array([0.8, 1.0])]
         self.sr_data = 100
         self.num_components = 0
         self.resample = 7
@@ -107,14 +115,14 @@ class Args:
         self.norm_path = os.path.join(data_path, 'norm_coeff')
         self.pca_path = os.path.join(data_path, 'pca128_model')
         self.load_pca = False
-        self.dump_data = [os.path.join(data_path, 'train_data_whiten', 'c')]
-        self.load_data = self.dump_data
+        self.dump_data = [os.path.join(data_path, 'train_data_cval' +str(i), 'c') for i in range(5)]
+        self.load_data = ['']#self.dump_data
 
         # analysis arguments
         self.closest_chs = 20
         self.PFI_inverse = True
         self.pfich_timesteps = [0, 256]
-        self.halfwin = 50
+        self.halfwin = 5
         self.compare_model = False
         self.generate_noise = 1
         self.generate_length = self.sr_data * 1000

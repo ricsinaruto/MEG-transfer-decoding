@@ -139,9 +139,12 @@ class CichyData(MRCData):
             self.timesteps = dataset.shape[3]
 
             # create training and validation splits with equal class numbers
-            split = int(args.split * min_trials)
-            x_val = dataset[:, :split, :, :]
-            x_train = dataset[:, split:, :, :]
+            split_l = int(args.split[0] * min_trials)
+            split_h = int(args.split[1] * min_trials)
+            x_val = dataset[:, split_l:split_h, :, :]
+            x_train = dataset[:, :split_l, :, :]
+            x_train = np.concatenate((x_train, dataset[:, split_h:, :, :]),
+                                     axis=1)
 
             # crop training trials
             max_trials = round(args.max_trials * x_train.shape[1])

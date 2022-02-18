@@ -339,7 +339,7 @@ class Experiment:
         '''
         accuracies = []
         nc = self.args.num_classes
-        chn = self.args.num_channels - 1
+        chn = self.args.num_channels
         x_t = self.dataset.x_train_t.clone()
         x_v = self.dataset.x_val_t.clone()
 
@@ -354,15 +354,17 @@ class Experiment:
                 self.dataset.x_train_t[x_t[:, chn, 0] == c2, chn, :] = 1
 
                 # select trials from these 2 classes
-                inds = x_t[:, chn, 0] == c1 or x_t[:, chn, 0] == c2
+                inds = (x_t[:, chn, 0] == c1) | (x_t[:, chn, 0] == c2)
+                #print(x_t[:100, chn, 0])
                 self.dataset.x_train_t = self.dataset.x_train_t[inds, :, :]
+                #print(self.dataset.x_train_t.shape)
 
                 # repeat for validation data
                 self.dataset.x_val_t = x_v.clone()
                 self.dataset.x_val_t[x_v[:, chn, 0] == c1, chn, :] = 0
                 self.dataset.x_val_t[x_v[:, chn, 0] == c2, chn, :] = 1
 
-                inds = x_v[:, chn, 0] == c1 or x_v[:, chn, 0] == c2
+                inds = (x_v[:, chn, 0] == c1) | (x_v[:, chn, 0] == c2)
                 self.dataset.x_val_t = self.dataset.x_val_t[inds, :, :]
 
                 accs = self.lda_baseline()
@@ -906,6 +908,7 @@ def main(Args):
         args_pass.learning_rate = checklist(args.learning_rate, i)
         args_pass.load_conv = checklist(args.load_conv, i)
         args_pass.compare_model = checklist(args.compare_model, i)
+        args_pass.split = checklist(args.split, i)
 
         # skip if subject does not exist
         if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
