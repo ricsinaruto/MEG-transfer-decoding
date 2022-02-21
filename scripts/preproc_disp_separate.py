@@ -6,13 +6,6 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/subj1/maxfiltered_common/"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/subj1/common_preproc25hz_ica_meg/"
-
-osl_outdir = os.path.join(outdir, 'oslpy')
-report_dir = os.path.join(osl_outdir, 'report')
-os.makedirs(report_dir, exist_ok=True)
-
 decim = 10
 
 config_text = """
@@ -24,7 +17,7 @@ meta:
         words/toilet: 5
         words/pain: 6
 preproc:
-  - filter:         {l_freq: 0.1, h_freq: 25}
+  - filter:         {l_freq: 0.1, h_freq: 124.9}
   - notch_filter:   {freqs: '50'}
   - bad_channels:   {picks: 'mag'}
   - bad_channels:   {picks: 'grad'}
@@ -44,13 +37,20 @@ preproc:
   - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation'}
 """
 
-drop_log = open(os.path.join(outdir, 'drop_log.txt'), 'w')
-files = [f for f in os.listdir(dataset_path) if ('task' in f and 'mc.fif' in f)]
-for f in files:
+
+for i in range(15):
+    dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/s1_raw_separate/subj' + str(i)
+    files = [f for f in os.listdir(dataset_path) if ('task' in f and 'mc.fif' in f)]
+
+    outdir = os.path.join(dataset_path, 'preproc125hz_ica_meg')
+    osl_outdir = os.path.join(outdir, 'oslpy')
+    os.makedirs(osl_outdir, exist_ok=True)
+
+    raw = mne.io.read_raw_fif(os.path.join(dataset_path, files[0]), preload=True)
+
     config = yaml.load(config_text, Loader=yaml.FullLoader)
-    raw = mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=True)
     dataset = osl.preprocessing.run_proc_chain(
-        raw, config, outdir=osl_outdir, overwrite=True)
+        raw, config)
 
     print(raw.info)
     raw = dataset['raw']
@@ -67,14 +67,6 @@ for f in files:
                         picks=['meg'],
                         reject=None,
                         preload=True)
-
-    #print(epochs.ch_names)
-
-    for reason in epochs.drop_log:
-        if reason:
-            if reason[0] != 'IGNORED':
-                print(reason)
-                drop_log.write(str(reason) + '\n')
 
     scaler = mne.decoding.Scaler(scalings='mean')
     scaler.fit(epochs.get_data())

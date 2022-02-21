@@ -29,7 +29,7 @@ class Experiment:
 
         # create folder for results
         if os.path.isdir(self.args.result_dir):
-            print('Result already directory exists, writing to it.',
+            print('Result directory already exists, writing to it.',
                   flush=True)
             print(self.args.result_dir, flush=True)
         else:
@@ -658,7 +658,6 @@ class Experiment:
         Newer Permutation Feature Importance (PFI) function for timesteps.
         Could also try the inverse, like a combination of PFI and window_eval.
         '''
-        loss_list = []
         hw = self.args.halfwin
         val_t = self.dataset.x_val_t.clone()
         shuffled_val_t = self.dataset.x_val_t.clone()
@@ -676,26 +675,33 @@ class Experiment:
             out = a[idx, np.arange(a.shape[1])].T
             shuffled_val_t[:, :chn, i] = out
 
-        # slide over the epoch and always permute timesteps within a window
-        for i in range(hw, times-hw):
-            self.dataset.x_val_t = val_t.clone()
-            if i > 0:
-                # either permute inside or outside the window
-                if self.args.PFI_inverse:
-                    window = shuffled_val_t[:, :chn, :i-hw].clone()
-                    self.dataset.x_val_t[:, :chn, :i-hw] = window
-                    window = shuffled_val_t[:, :chn, i+hw:].clone()
-                    self.dataset.x_val_t[:, :chn, i+hw:] = window
-                else:
-                    window = shuffled_val_t[:, :chn, i-hw:i+hw].clone()
-                    self.dataset.x_val_t[:, :chn, i-hw:i+hw] = window
+        perm_list = []
+        for p in range(self.args.PFI_perms):
+            loss_list = []
+            # slide over the epoch and always permute timesteps within a window
+            for i in range(hw, times-hw):
+                self.dataset.x_val_t = val_t.clone()
+                if i > hw:
+                    # either permute inside or outside the window
+                    if self.args.PFI_inverse:
+                        window = shuffled_val_t[:, :chn, :i-hw].clone()
+                        self.dataset.x_val_t[:, :chn, :i-hw] = window
+                        window = shuffled_val_t[:, :chn, i+hw:].clone()
+                        self.dataset.x_val_t[:, :chn, i+hw:] = window
+                    else:
+                        window = shuffled_val_t[:, :chn, i-hw:i+hw].clone()
+                        self.dataset.x_val_t[:, :chn, i-hw:i+hw] = window
 
-            loss = val_func(self.dataset.x_val_t)
-            loss_list.append(str(loss))
+                loss = val_func(self.dataset.x_val_t)
+                loss_list.append(loss)
+
+            perm_list.append(np.array(loss_list))
+
+        perm_list = np.average(np.array(perm_list), axis=0)
 
         path = os.path.join(self.args.result_dir, 'val_loss_PFIts.txt')
         with open(path, 'w') as f:
-            f.write('\n'.join(loss_list))
+            f.write('\n'.join([str(x) for x in perm_list]))
 
     def PFIch(self):
         '''
