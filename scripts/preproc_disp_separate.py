@@ -17,16 +17,15 @@ meta:
         words/toilet: 5
         words/pain: 6
 preproc:
-  - filter:         {l_freq: 0.1, h_freq: 124.9}
+  - filter:         {l_freq: 0.1, h_freq: 25}
   - notch_filter:   {freqs: '50'}
   - bad_channels:   {picks: 'mag'}
   - bad_channels:   {picks: 'grad'}
   - bad_channels:   {picks: 'eeg'}
-  - bad_segments:   {segment_len: 800, picks: 'mag'}
-  - bad_segments:   {segment_len: 800, picks: 'grad'}
+  - bad_segments:   {segment_len: 800, picks: 'eeg'}
   - find_events:    {min_duration: 0.002}
-  - ica_raw:        {picks: 'meg', n_components: 64}
-  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation'}
+  - ica_raw:        {picks: 'eeg', n_components: 32}
+  - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
 """
 
 config_report = """
@@ -38,19 +37,21 @@ preproc:
 """
 
 
-for i in range(15):
-    dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/s1_raw_separate/subj' + str(i)
+for i in range(6):
+    dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/s2/maxfiltered/subj' + str(i)
     files = [f for f in os.listdir(dataset_path) if ('task' in f and 'mc.fif' in f)]
 
-    outdir = os.path.join(dataset_path, 'preproc125hz_ica_meg')
-    osl_outdir = os.path.join(outdir, 'oslpy')
-    os.makedirs(osl_outdir, exist_ok=True)
+    outdir = os.path.join(dataset_path, '..', '..', 'preproc25hz_eeg', 'subj' +str(i))
+    os.makedirs(outdir, exist_ok=True)
+    osl_outdir = os.path.join(outdir, '..', 'oslpy')
+    report_dir = os.path.join(osl_outdir, 'report')
+    os.makedirs(report_dir, exist_ok=True)
 
     raw = mne.io.read_raw_fif(os.path.join(dataset_path, files[0]), preload=True)
 
     config = yaml.load(config_text, Loader=yaml.FullLoader)
     dataset = osl.preprocessing.run_proc_chain(
-        raw, config)
+        raw, config, outdir=osl_outdir, overwrite=True)
 
     print(raw.info)
     raw = dataset['raw']
@@ -64,7 +65,7 @@ for i in range(15):
                         tmin=-0.4,
                         tmax=1.6,
                         baseline=None,
-                        picks=['meg'],
+                        picks=['eeg'],
                         reject=None,
                         preload=True)
 
@@ -82,11 +83,10 @@ for i in range(15):
         savemat(f"{outdir}/cond{event_id-2}/trial{n_trials}.mat", {'X': data})
 
 # generate report
-'''
+osl_outdir = os.path.join('/gpfs2/well/woolrich/projects/disp_csaky/s2', 'preproc25hz_eeg', 'oslpy')
+report_dir = os.path.join(osl_outdir, 'report')
+
 files = [f for f in os.listdir(osl_outdir) if ('task' in f and 'raw.fif' in f)]
 files = [os.path.join(osl_outdir, f) for f in files]
 
-osl.report.gen_report(files, outdir=report_dir, preproc_config=config_report)
-
-drop_log.close()
-'''
+osl.report.gen_report(files, outdir=report_dir)

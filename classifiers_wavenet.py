@@ -205,6 +205,33 @@ class WavenetClassifierSemb(WavenetClassifier):
     '''
     Wavenet Classifier for multi-subject data using subject embeddings.
     '''
+    def set_sub_dict(self):
+        # this dictionary is needed because
+        # subject embeddings and subjects have a different ordering
+        self.sub_dict = {0: 10,
+                         1: 7,
+                         2: 3,
+                         3: 11,
+                         4: 8,
+                         5: 4,
+                         6: 12,
+                         7: 9,
+                         8: 5,
+                         9: 13,
+                         10: 1,
+                         11: 14,
+                         12: 2,
+                         13: 6,
+                         14: 0}
+
+    def __init__(self, args):
+        super(WavenetClassifierSemb, self).__init__(args)
+        self.set_sub_dict()
+
+    def loaded(self, args):
+        super(WavenetClassifierSemb, self).loaded(args)
+        self.set_sub_dict()
+
     def build_model(self, args):
         self.wavenet = args.wavenet_class(args)
 
@@ -228,18 +255,17 @@ class WavenetClassifierSemb(WavenetClassifier):
         '''
         Get subject id based on result directory name.
         '''
-        ind = int(self.args.result_dir.split('_')[-1])
-        sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
+        ind = int(self.args.result_dir.split('_')[-1].split('/')[0])
+        ind = self.sub_dict[ind]
 
+        sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
         return sid
 
-    def forward_(self, x, sid=None):
-        '''
-        Use the subject embedding of a subject based on result directory name.
-        Not normally used.
-        '''
-        sid = self.get_sid(sid)
-        return super(WavenetClassifierSemb, self).forward(x, sid=sid)
+    def forward(self, x, sid=None):
+        if 'sub' in self.args.result_dir:
+            sid = self.get_sid(sid)
+
+        return super(WavenetClassifierSemb, self).forward(x, sid)
 
 
 class WavenetClassifierSembChet(WavenetClassifierSemb):
@@ -421,48 +447,6 @@ class WavenetClassPredSemb(WavenetClassPred, WavenetClassifierSemb):
     '''
     This class makes WavenetClassPred to work with subject embeddings.
     '''
-    def set_sub_dict(self):
-        # this dictionary is needed because
-        # continuous and epoched subjects have a different ordering
-        self.sub_dict = {0: 10,
-                         1: 7,
-                         2: 3,
-                         3: 11,
-                         4: 8,
-                         5: 4,
-                         6: 12,
-                         7: 9,
-                         8: 5,
-                         9: 13,
-                         10: 1,
-                         11: 14,
-                         12: 2,
-                         13: 6,
-                         14: 0}
-
-    def __init__(self, args):
-        super(WavenetClassPredSemb, self).__init__(args)
-        self.set_sub_dict()
-
-    def loaded(self, args):
-        super(WavenetClassPredSemb, self).loaded(args)
-        self.set_sub_dict()
-
-    def get_sid(self, sid):
-        '''
-        Get subject id based on result directory name.
-        '''
-        ind = int(self.args.result_dir.split('_')[-1].split('/')[0])
-        ind = self.sub_dict[ind]
-
-        sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
-        return sid
-
-    def forward(self, x, sid=None):
-        if 'sub' in self.args.result_dir:
-            sid = self.get_sid(sid)
-
-        return super(WavenetClassPredSemb, self).forward(x, sid)
 
 
 class WavenetCombined(WavenetClassPred):

@@ -6,8 +6,8 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/subj1/maxfiltered_common/"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/subj1/common_preproc25hz_ica_meg/"
+dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/subj2/sess3_1/maxfiltered"
+outdir = "/gpfs2/well/woolrich/projects/disp_csaky/subj2/sess3_1/preproc25hz"
 
 osl_outdir = os.path.join(outdir, 'oslpy')
 report_dir = os.path.join(osl_outdir, 'report')
@@ -32,8 +32,6 @@ preproc:
   - bad_segments:   {segment_len: 800, picks: 'mag'}
   - bad_segments:   {segment_len: 800, picks: 'grad'}
   - find_events:    {min_duration: 0.002}
-  - ica_raw:        {picks: 'meg', n_components: 64}
-  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation'}
 """
 
 config_report = """
@@ -94,7 +92,7 @@ for f in files:
 files = [f for f in os.listdir(osl_outdir) if ('task' in f and 'raw.fif' in f)]
 files = [os.path.join(osl_outdir, f) for f in files]
 
-osl.report.gen_report(files, outdir=report_dir, preproc_config=config_report)
+osl.report.gen_report(files, outdir=report_dir)
 
 drop_log.close()
 '''

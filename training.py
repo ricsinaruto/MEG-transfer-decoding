@@ -48,7 +48,10 @@ class Experiment:
 
         # load model if path is specified
         if args.load_model:
-            self.model_path = os.path.join(args.load_model, 'model.pt')
+            if 'model' in args.load_model:
+                self.model_path = args.load_model
+            else:
+                self.model_path = os.path.join(args.load_model, 'model.pt')
 
             # LDA vs deep learning models
             try:
@@ -368,7 +371,7 @@ class Experiment:
                 self.dataset.x_val_t = self.dataset.x_val_t[inds, :, :]
 
                 accs = self.lda_baseline()
-                accuracies.append(accs)
+                accuracies.append(';'.join(accs))
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
         with open(path, 'w') as f:
@@ -915,6 +918,7 @@ def main(Args):
         args_pass.load_conv = checklist(args.load_conv, i)
         args_pass.compare_model = checklist(args.compare_model, i)
         args_pass.split = checklist(args.split, i)
+        args_pass.stft_freq = checklist(args.stft_freq, i)
 
         # skip if subject does not exist
         if not (os.path.isfile(d_path) or os.path.isdir(d_path)):

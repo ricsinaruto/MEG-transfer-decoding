@@ -9,6 +9,7 @@ from sklearn.svm import SVC, LinearSVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
 
 
 class LDA:
@@ -127,16 +128,13 @@ class LDA_wavelet(LDA):
     '''
     LDA model trained on wavelet transformed data.
     '''
-    def prep_lda(self, data):
-        '''
-        Apply wavelet transform when preparing data.
-        '''
+    def wavelet(self, data):
         hw = self.args.halfwin
         data = data.reshape(-1, self.ts, data.shape[1])
         data = data.transpose(0, 2, 1)
+        trials = data.shape[0]
 
         # STFT
-        trials = data.shape[0]
         data = data.reshape(-1, data.shape[2])
 
         window = torch.hamming_window(2*hw)
@@ -148,6 +146,14 @@ class LDA_wavelet(LDA):
                           return_complex=False)
         data = data.numpy()
         data = data.transpose(0, 2, 1, 3)
+
+        return trials, data
+
+    def prep_lda(self, data):
+        '''
+        Apply wavelet transform when preparing data.
+        '''
+        trials, data = self.wavelet(data)
         data = data.reshape(data.shape[0], data.shape[1], -1)
         data = data.reshape(trials, -1, data.shape[1], data.shape[2])
 
@@ -170,15 +176,72 @@ class LDA_wavelet(LDA):
         return data
 
 
+class LDA_wavelet_freq(LDA_wavelet):
+    def prep_lda(self, data):
+        trials = data.shape[0]
+        trials, data = self.wavelet(data)
+
+        data = data[:, :, self.args.stft_freq, :]
+        data = data.reshape(trials, -1, data.shape[1], data.shape[2])
+        data = data[:, :, self.window[0], :].reshape(trials, -1)
+
+        print('Data shape: ', data.shape)
+        return data
+
+
+class LDA_wavelet_forest(LDA_wavelet_freq):
+    def prep_lda(self, data):
+        trials = data.shape[0]
+        trials, data = self.wavelet(data)
+
+        self.freqs = data.shape[2]
+        data = data.reshape(
+            trials, -1, data.shape[1], self.freqs, data.shape[3])
+
+        data = data[:, :, self.window[0], :, :]
+        data = data.transpose(2, 0, 1, 3)
+        data = data.reshape(self.freqs, trials, -1)
+
+        print('Data shape: ', data.shape)
+        return data
+
+    def run(self, x_train, x_val, window=None):
+        '''
+        Transform data, then train and evaluate LDA.
+        '''
+        self.window = window
+        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val)
+
+        # fit LDA for each frequency band
+        y_preds_t = []
+        y_preds_v = []
+        for f in range(self.freqs):
+            self.init_model()
+            self.model.fit(x_train[f, :, :], y_train)
+
+            y_preds_t.append(self.model.predict(x_train[f, :, :]))
+            y_preds_v.append(self.model.predict(x_val[f, :, :]))
+
+        # fit random forest on all frequencies
+        forest = RandomForestClassifier()
+        y_preds_t = np.array(y_preds_t)
+        y_preds_v = np.array(y_preds_v)
+
+        forest.fit(y_preds_t.T, y_train)
+        acc = forest.score(y_preds_v.T, y_val)
+
+        return acc
+
+
 class LogisticReg(LDA):
     '''
     Logistic Regression model using the functionalities of the LDA class.
     Uses L2 regularization.
     '''
-    def __init__(self, args):
-        super(LogisticReg, self).__init__(args)
+    def init_model(self):
         self.model = LogisticRegression(multi_class='multinomial',
                                         max_iter=1000)
+        self.fit_pca = False
 
 
 class LogisticRegL1(LDA):
