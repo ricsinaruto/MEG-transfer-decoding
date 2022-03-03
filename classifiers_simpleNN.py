@@ -173,6 +173,55 @@ class SimpleClassifier(Module):
         self.targets.append(targets.cpu().numpy())
 
 
+class SimpleClassifierPosEncoding(SimpleClassifier):
+    def __init__(self, args):
+        super(SimpleClassifierPosEncoding, self).__init__(args)
+
+        # initialize position look up table
+        d = args.pos_enc_d
+        vectors = []
+        for t in range(1, 1000):
+            k = np.arange(1, int(d/2) + 1)
+            w = 1/10000**(2*k/d)
+
+            a = np.sin(w*t)
+            b = np.cos(w*t)
+
+            p = np.empty((a.size + b.size,), dtype=a.dtype)
+            p[0::2] = a
+            p[1::2] = b
+
+            p = torch.Tensor(p).float().cuda()
+            vectors.append(p)
+
+        self.vectors = torch.stack(vectors)
+
+    def build_model(self, args):
+        chn = args.num_channels + args.pos_enc_d - 1
+
+        # start with a dimension reduction over the channels
+        self.spatial_conv = Conv1d(chn, args.dim_red, kernel_size=1, groups=1)
+        self.classifier = ClassifierModule(args, args.dim_red*args.sample_rate)
+
+    def embed(self, x):
+        encoding = self.vectors[x[:, -1, :].long()]
+        encoding = encoding.permute(0, 2, 1)
+
+        if self.args.pos_enc_type == 'cat':
+            x = torch.cat((x[:, :-1, :], encoding), axis=1)
+        else:
+            x = x[:, :-1, :] + encoding
+
+        return x
+
+    def forward(self, x, sid=None):
+        '''
+        Run a dimension reduction over the channels then run the classifier.
+        '''
+        x = self.embed(x)
+        return super(SimpleClassifierPosEncoding, self).forward(x, sid)
+
+
 class SimpleClassifier0(SimpleClassifier):
     '''
     Simple Classifier but with a single linear transform.

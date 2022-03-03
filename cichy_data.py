@@ -130,7 +130,7 @@ class CichyData(MRCData):
             # condition with lowest number of trials
             print('Minimum trials: ', min_trials, flush=True)
 
-            # dataset shape: conditions x trials x channels x timesteps
+            # dataset shape: conditions x trials x timesteps x channels
             dataset = np.array([t[:min_trials, :, :] for t in dataset])
 
             # choose first 306 channels
