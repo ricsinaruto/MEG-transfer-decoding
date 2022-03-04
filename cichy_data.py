@@ -89,6 +89,16 @@ class CichyData(MRCData):
                     'sub_id_val': self.sub_id['val']}
             savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
 
+    def splitting(self, dataset, args):
+        split_l = int(args.split[0] * dataset.shape[1])
+        split_h = int(args.split[1] * dataset.shape[1])
+        x_val = dataset[:, split_l:split_h, :, :]
+        x_train = dataset[:, :split_l, :, :]
+        x_train = np.concatenate((x_train, dataset[:, split_h:, :, :]),
+                                 axis=1)
+
+        return x_train, x_val
+
     def load_data(self, args):
         '''
         Load trials for each condition from multiple subjects.
@@ -139,12 +149,7 @@ class CichyData(MRCData):
             self.timesteps = dataset.shape[3]
 
             # create training and validation splits with equal class numbers
-            split_l = int(args.split[0] * min_trials)
-            split_h = int(args.split[1] * min_trials)
-            x_val = dataset[:, split_l:split_h, :, :]
-            x_train = dataset[:, :split_l, :, :]
-            x_train = np.concatenate((x_train, dataset[:, split_h:, :, :]),
-                                     axis=1)
+            x_train, x_val = self.splitting(dataset, args)
 
             # crop training trials
             max_trials = round(args.max_trials * x_train.shape[1])
@@ -203,6 +208,21 @@ class CichyDataRandsample(CichyData):
         self.inds['train'] = [v for v in self.inds['train'] if v not in inds]
 
         return self.x_train_t[inds, :, :], self.sub_id['train'][inds]
+
+
+class CichyDataCrossval(CichyData):
+    def splitting(self, dataset, args):
+        split = args.split[1] - args.split[0]
+        split = int(split*dataset.shape[1])
+
+        for i in range(dataset.shape[0]):
+            perm = np.random.permutation(dataset.shape[1])
+            dataset[i, :, :, :] = dataset[i, perm, :, :]
+
+        x_val = dataset[:, :split, :, :]
+        x_train = dataset[:, split:, :, :]
+
+        return x_train, x_val
 
 
 class CichyContData(MRCData):

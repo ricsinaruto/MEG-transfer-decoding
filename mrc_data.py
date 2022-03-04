@@ -83,7 +83,9 @@ class MRCData(DondersData):
         '''
         Load raw data from multiple subjects.
         '''
-        if '.mat' in args.data_path:
+        if isinstance(args.data_path, list):
+            paths = args.data_path
+        elif '.mat' in args.data_path:
             paths = [args.data_path]
         else:
             paths = os.listdir(args.data_path)
@@ -134,8 +136,12 @@ class MRCData(DondersData):
             x_train = x_train[args.num_channels, ::resample]
 
             # create training and validation splits
-            x_val = x_train[:, :int(args.split * x_train.shape[1])].T
-            x_train = x_train[:, int(args.split * x_train.shape[1]):].T
+            split_l = int(args.split[0] * x_train.shape[1])
+            split_h = int(args.split[1] * x_train.shape[1])
+            x_val = x_train[:, split_l:split_h].T
+            x_train_ = x_train[:, :split_l]
+            x_train = np.concatenate((x_train_, x_train[:, split_h:]), axis=1)
+            x_train = x_train.T
 
             x_train, x_val = self.normalize(x_train, x_val)
 

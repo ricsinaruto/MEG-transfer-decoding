@@ -921,9 +921,11 @@ def main(Args):
         args_pass.stft_freq = checklist(args.stft_freq, i)
 
         # skip if subject does not exist
-        if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
-            print('Skipping ' + d_path, flush=True)
-            continue
+
+        if not isinstance(d_path, list):
+            if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
+                print('Skipping ' + d_path, flush=True)
+                continue
 
         e = Experiment(args_pass)
 

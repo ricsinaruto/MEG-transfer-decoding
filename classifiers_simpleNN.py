@@ -222,6 +222,39 @@ class SimpleClassifierPosEncoding(SimpleClassifier):
         return super(SimpleClassifierPosEncoding, self).forward(x, sid)
 
 
+class SimpleClassifierTimeEncoding(SimpleClassifierPosEncoding):
+    def __init__(self, args):
+        super(SimpleClassifierTimeEncoding, self).__init__(args)
+
+        self.inds = np.arange(self.args.sample_rate).reshape(1, -1)
+
+    def build_model(self, args):
+        chn = args.num_channels + args.pos_enc_d
+
+        # start with a dimension reduction over the channels
+        self.spatial_conv = Conv1d(chn, args.dim_red, kernel_size=1, groups=1)
+        self.classifier = ClassifierModule(args, args.dim_red*args.sample_rate)
+
+    def embed(self, x):
+        inds = np.repeat(self.inds, x.shape[0], axis=0)
+        encoding = self.vectors[torch.Tensor(inds).long()]
+        encoding = encoding.permute(0, 2, 1)
+
+        if self.args.pos_enc_type == 'cat':
+            x = torch.cat((x, encoding), axis=1)
+        else:
+            x = x + encoding
+
+        return x
+
+    def forward(self, x, sid=None):
+        '''
+        Run a dimension reduction over the channels then run the classifier.
+        '''
+        x = self.embed(x)
+        return super(SimpleClassifierPosEncoding, self).forward(x, sid)
+
+
 class SimpleClassifier0(SimpleClassifier):
     '''
     Simple Classifier but with a single linear transform.

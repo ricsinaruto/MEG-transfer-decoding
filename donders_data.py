@@ -283,10 +283,11 @@ class DondersData:
         the discontinuities (disconts).
         '''
         # each element in x_segments is a continuous data segment
+        sr = self.args.sample_rate[1] - self.args.sample_rate[0]
         x_segments = []
         if len(disconts) > 1:
             for i, m in enumerate(disconts[:-1]):
-                if len(x[0, m:disconts[i + 1]]) > self.args.sample_rate:
+                if len(x[0, m:disconts[i + 1]]) > sr:
                     x_segments.append(x[:, m:disconts[i + 1]])
             x_segments.append(x[:, disconts[-1]:])
         else:
@@ -298,7 +299,7 @@ class DondersData:
             i = 0
             samples = []
             while True:
-                end = i * self.shift + self.args.sample_rate
+                end = i * self.shift + sr
                 if end > x.shape[1]:
                     break
                 samples.append(x[:, i * self.shift:end])
