@@ -1182,14 +1182,14 @@ class ConvPoolNet(WavenetSimple):
         super(ConvPoolNet, self).build_model(args)
 
         # add the maxpool layers to the model
-        modules = [MaxPool1d(kernel_size=2, stride=2) for r in args.dilations]
+        modules = [args.pooling(kernel_size=2, stride=2) for r in args.dilations]
         self.maxpool_layers = Sequential(*modules)
 
-    def forward(self, x):
+    def forward(self, x, sid=None):
         x = self.first_conv(x)
 
         for conv, pool in zip(self.cnn_layers, self.maxpool_layers):
-            x = self.activation(pool(conv(x)))
+            x = self.activation(self.dropout(pool(conv(x))))
 
         return self.last_conv(x), x
 

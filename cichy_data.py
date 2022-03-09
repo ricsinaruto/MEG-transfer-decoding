@@ -21,25 +21,41 @@ class CichyData(MRCData):
         num_ch = len(chn) - 1
         x_train_ts = []
         x_val_ts = []
+        x_test_ts = []
 
         # load data for each channel
         for index, i in enumerate(chn):
             data = loadmat(args.load_data + 'ch' + str(i) + '.mat')
             x_train_ts.append(np.array(data['x_train_t']))
             x_val_ts.append(np.array(data['x_val_t']))
+            try:
+                x_test_ts.append(np.array(data['x_test_t']))
+            except:
+                pass
 
             if index == 0:
                 self.sub_id['train'] = np.array(data['sub_id_train'])
                 self.sub_id['val'] = np.array(data['sub_id_val'])
+                try:
+                    self.sub_id['test'] = np.array(data['sub_id_test'])
+                except:
+                    pass
 
         self.x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
         self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
+
+        if len(x_test_ts) == 0:
+            self.x_test_t = self.x_val_t
+            self.sub_id['test'] = self.sub_id['val']
+        else:
+            self.x_test_t = np.concatenate(tuple(x_test_ts), axis=1)
 
         # crop data
         tmin = args.sample_rate[0]
         tmax = args.sample_rate[1]
         self.x_train_t = self.x_train_t[:, :, tmin:tmax]
         self.x_val_t = self.x_val_t[:, :, tmin:tmax]
+        self.x_test_t = self.x_test_t[:, :, tmin:tmax]
 
         args.sample_rate = tmax - tmin
 
@@ -85,8 +101,10 @@ class CichyData(MRCData):
         for i in range(self.x_train_t.shape[1]):
             dump = {'x_train_t': self.x_train_t[:, i:i+1:, :],
                     'x_val_t': self.x_val_t[:, i:i+1, :],
+                    'x_test_t': self.x_test_t[:, i:i+1, :],
                     'sub_id_train': self.sub_id['train'],
-                    'sub_id_val': self.sub_id['val']}
+                    'sub_id_val': self.sub_id['val'],
+                    'sub_id_test': self.sub_id['test']}
             savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
 
     def splitting(self, dataset, args):
@@ -116,6 +134,7 @@ class CichyData(MRCData):
         channels = len(args.num_channels)
         x_trains = []
         x_vals = []
+        x_tests = []
         for path in paths:
             print('Loading ', path, flush=True)
             min_trials = 1000000
@@ -149,7 +168,7 @@ class CichyData(MRCData):
             self.timesteps = dataset.shape[3]
 
             # create training and validation splits with equal class numbers
-            x_train, x_val = self.splitting(dataset, args)
+            x_train, x_val, x_test = self.splitting(dataset, args)
 
             # crop training trials
             max_trials = round(args.max_trials * x_train.shape[1])
@@ -157,17 +176,19 @@ class CichyData(MRCData):
 
             x_train = x_train.transpose(0, 1, 3, 2).reshape(-1, channels)
             x_val = x_val.transpose(0, 1, 3, 2).reshape(-1, channels)
+            x_test = x_test.transpose(0, 1, 3, 2).reshape(-1, channels)
 
             # standardize dataset along channels
-            x_train, x_val = self.normalize(x_train, x_val)
+            x_train, x_val, x_test = self.normalize(x_train, x_val, x_test)
 
             x_trains.append(x_train)
             x_vals.append(x_val)
+            x_tests.append(x_test)
 
         # this is just needed to work together with other dataset classes
         disconts = [[0] for path in paths]
         args.num_channels = len(args.num_channels)
-        return x_trains, x_vals, disconts
+        return x_trains, x_vals, x_tests, disconts
 
     def create_examples(self, x, disconts):
         '''
@@ -219,10 +240,13 @@ class CichyDataCrossval(CichyData):
             perm = np.random.permutation(dataset.shape[1])
             dataset[i, :, :, :] = dataset[i, perm, :, :]
 
+        # create separate val and test splits
         x_val = dataset[:, :split, :, :]
         x_train = dataset[:, split:, :, :]
+        x_test = x_train[:, :split:, :, :]
+        x_train = x_train[:, split:, :, :]
 
-        return x_train, x_val
+        return x_train, x_val, x_test
 
 
 class CichyContData(MRCData):

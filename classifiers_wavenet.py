@@ -4,7 +4,7 @@ import torch
 
 from torch.nn import Conv1d, Embedding
 
-from wavenets_simple import WavenetSimple, WavenetSimpleSTS
+from wavenets_simple import WavenetSimple, WavenetSimpleSTS, ConvPoolNet
 from wavenets_simple import WavenetSimpleSembConcat, WavenetSimpleSembAdd
 from wavenets_simple import WavenetSimpleSembMult, WavenetSimpleChetSemb
 from wavenets_full import WavenetSimpleSkips
@@ -35,6 +35,33 @@ class WavenetClassifier(SimpleClassifier):
         output, x = self.wavenet(x, sid)
         x = x[:, :, ::self.args.rf].reshape(x.shape[0], -1)
         x = self.classifier(x)
+
+        return output, x
+
+
+class ConvPoolClassifier(WavenetClassifier):
+    def output_size(self, args):
+        time_d = args.sample_rate
+        ks = args.kernel_size
+
+        for i in args.dilations:
+            time_d -= ks-1
+            time_d = int(time_d/2)
+
+        return time_d
+
+    def build_model(self, args):
+        self.wavenet = ConvPoolNet(args)
+
+        self.class_dim = self.wavenet.ch * self.output_size(args)
+        self.classifier = ClassifierModule(args, self.class_dim)
+
+    def forward(self, x, sid=None):
+        '''
+        Run wavenet on input then feed the output into the classifier.
+        '''
+        output, x = self.wavenet(x, sid)
+        x = self.classifier(x.reshape(x.shape[0], -1))
 
         return output, x
 

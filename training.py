@@ -143,6 +143,9 @@ class Experiment:
                     torch.save(self.model, self.model_path, pickle_protocol=4)
                     print('Validation loss improved, model saved.', flush=True)
 
+                    # also compute test loss
+                    self.testing()
+
                 # save loss plots if needed
                 if self.args.save_curves:
                     self.save_curves()
@@ -150,6 +153,25 @@ class Experiment:
         # wrap up training and save validation loss
         self.model.end()
         self.save_validation()
+
+    def testing(self):
+        '''
+        Evaluate model on the validation dataset.
+        '''
+        self.loss.dict = {}
+        self.model.eval()
+
+        # loop over validation batches
+        for i in range(self.dataset.test_batches):
+            batch, sid = self.dataset.get_test_batch(i)
+            loss, output, target = self.model.loss(batch, i, sid, train=False)
+            self.loss.append(loss)
+
+        losses = self.loss.print('valloss')
+
+        path = os.path.join(self.args.result_dir, 'test_loss.txt')
+        with open(path, 'w') as f:
+            f.write(str(losses))
 
     def save_curves(self):
         '''
@@ -654,7 +676,8 @@ class Experiment:
         return loss[0]
 
     def LDA_eval_(self, data):
-        return self.model.eval(data)
+        acc, _, _ = self.model.eval(data)
+        return acc
 
     def PFIts(self):
         '''
@@ -718,6 +741,10 @@ class Experiment:
         tmin = self.args.pfich_timesteps[0]
         tmax = self.args.pfich_timesteps[1]
 
+        # whether dealing with LDA or deep learning models
+        lda_or_not = isinstance(self.model, LDA)
+        val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+
         # read a file containing closest channels to each channel location
         path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
         with open(path, 'rb') as f:
@@ -731,9 +758,8 @@ class Experiment:
             shuffled_val_t[:, i, :] = out
 
         # evaluate without channel shuffling
-        loss, _, _ = self.evaluate()
-        loss = [loss[k] for k in loss if 'Validation acc' in k]
-        loss_list.append(str(loss[0]))
+        loss = val_func(self.dataset.x_val_t)
+        loss_list.append(str(loss))
 
         # loop over channels and permute channels in vicinity of i-th channel
         for i in range(int(chn/3)):
@@ -754,9 +780,8 @@ class Experiment:
                 window = shuffled_val_t[:, chn_idx, tmin:tmax].clone()
                 self.dataset.x_val_t[:, chn_idx, tmin:tmax] = window
 
-            loss, _, _ = self.evaluate()
-            loss = [loss[k] for k in loss if 'Validation acc' in k]
-            loss_list.append(str(loss[0]))
+            loss = val_func(self.dataset.x_val_t)
+            loss_list.append(str(loss))
 
         # save accuracies to file
         name = 'val_loss_PFIch' + str(top_chs) + '.txt'
@@ -857,6 +882,27 @@ class Experiment:
             self.args.result_dir, 'val_loss_windows' + str(halfwin) + '.txt')
         with open(path, 'w') as f:
             f.write('\n'.join(loss_list))
+
+    def model_inversion(self):
+        weights = self.model.model.coef_.T
+        data, target, outputs = self.model.get_output(self.dataset.x_val_t)
+        print(data.shape)
+
+        '''
+        data_cov = np.cov(data.T)
+        output_cov = np.cov(outputs.T)
+
+        patterns = np.einsum('mm, mk, kk -> mk',
+                             data_cov, weights, np.linalg.inv(output_cov))
+        '''
+
+        data = self.dataset.x_val_t.reshape(data.shape[0], -1).cpu().numpy()
+        patterns = []
+        for i in range(data.shape[1]):
+            patterns.append(np.cov(data[:, i], target))
+
+        path = os.path.join(self.args.result_dir, 'patterns.npy')
+        np.save(path, np.array(patterns))
 
     def plot_freqs(self, ax):
         for freq in self.args.freqs:
@@ -975,5 +1021,7 @@ def main(Args):
             e.PFIch()
         if Args.func['PFIemb']:
             e.PFIemb()
+        if Args.func['model_inversion']:
+            e.model_inversion()
 
         e.save_embeddings()

@@ -81,6 +81,11 @@ class LDA:
 
         return x_train, x_val, y_train, y_val
 
+    def get_output(self, x_val, window=None):
+        _, x_val, y_val = self.eval(x_val)
+
+        return x_val, y_val, self.model.predict_proba(x_val)
+
     def eval(self, x_val, window=None):
         '''
         Evaluate an already trained LDA model.
@@ -93,7 +98,7 @@ class LDA:
             x_val = self.norm.transform(x_val)
 
         x_val = self.prep_lda(x_val)
-        return self.model.score(x_val, y_val)
+        return self.model.score(x_val, y_val), x_val, y_val
 
     def prepare(self, data):
         '''

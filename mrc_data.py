@@ -41,7 +41,10 @@ class MRCData(DondersData):
         self.x_train_t = np.concatenate(tuple(x_train_ts), axis=1)
         self.x_val_t = np.concatenate(tuple(x_val_ts), axis=1)
 
-    def whiten(self, x_train, x_val):
+        self.x_test_t = self.x_val_t
+        self.sub_id['test'] = self.sub_id['val']
+
+    def whiten(self, x_train, x_val, x_test):
         '''
         Apply pca to training and validation data.
         '''
@@ -53,15 +56,17 @@ class MRCData(DondersData):
         pca.fit(x_train)
         x_train = pca.transform(x_train)
         x_val = pca.transform(x_val)
+        x_test = pca.transform(x_test)
 
         # standardize output
         norm.fit(x_train)
         x_train = norm.transform(x_train)
         x_val = norm.transform(x_val)
+        x_test = norm.transform(x_test)
 
-        return x_train, x_val
+        return x_train, x_test
 
-    def normalize(self, x_train, x_val):
+    def normalize(self, x_train, x_val, x_test):
         '''
         Standardize and whiten data if needed.
         '''
@@ -71,13 +76,14 @@ class MRCData(DondersData):
         norm.fit(x_train[:, :chn])
         x_train[:, :chn] = norm.transform(x_train[:, :chn])
         x_val[:, :chn] = norm.transform(x_val[:, :chn])
+        x_test[:, :chn] = norm.transform(x_test[:, :chn])
 
         # if needed, remove covariance with PCA
         if self.args.whiten:
-            x_train[:, :chn], x_val[:, :chn] = self.whiten(x_train[:, :chn],
-                                                           x_val[:, :chn])
+            x_train[:, :chn], x_val[:, :chn], x_test[:, :chn] = \
+                self.whiten(x_train[:, :chn], x_val[:, :chn], x_test[:, :chn])
 
-        return x_train.T, x_val.T
+        return x_train.T, x_val.T, x_test.T
 
     def load_data(self, args):
         '''

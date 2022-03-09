@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 import random
 import numpy as np
 from scipy.io import savemat, loadmat
@@ -25,7 +26,7 @@ class DondersData:
         self.shift = sr - args.timesteps - args.rf + 1
         self.mean = None
         self.var = None
-        self.sub_id = {'train': [], 'val': []}
+        self.sub_id = {'train': [], 'val': [], 'test': []}
 
         # load normalization coefficients
         if not args.save_norm:
@@ -46,11 +47,12 @@ class DondersData:
             return
 
         # load the raw subject data
-        x_trains, x_vals, disconts = self.load_data(args)
+        x_trains, x_vals, x_tests, disconts = self.load_data(args)
 
         # this is the continuous data for AR models
         self.x_train = np.concatenate(tuple(x_trains), axis=1)
         self.x_val = np.concatenate(tuple(x_vals), axis=1)
+        self.x_test = np.concatenate(tuple(x_tests), axis=1)
 
         # fit a new PCA model and save it to disk
         if args.num_components and not args.load_pca:
@@ -92,8 +94,9 @@ class DondersData:
         # create examples from continuous data
         train_eps = []
         val_eps = []
-        loop_iter = zip(x_trains, x_vals, disconts)
-        for sid, (x_train, x_val, discont) in enumerate(loop_iter):
+        test_eps = []
+        loop_iter = zip(x_trains, x_vals, x_tests, disconts)
+        for sid, (x_train, x_val, x_test, discont) in enumerate(loop_iter):
             if args.num_components or args.load_pca:
                 # transform and normalize separately
                 x_train = pca_model.transform(x_train.transpose()).transpose()
@@ -116,9 +119,14 @@ class DondersData:
             train_eps.append(examples)
             self.sub_id['train'].extend([sid] * examples.shape[0])
 
+            examples = self.create_examples(x_test, val_disconts)
+            test_eps.append(examples)
+            self.sub_id['test'].extend([sid] * examples.shape[0])
+
         # concatenate across subjects and shuffle examples
         train_ep = np.concatenate(tuple(train_eps))
         val_ep = np.concatenate(tuple(val_eps))
+        test_ep = np.concatenate(tuple(test_eps))
 
         shuffled = list(range(train_ep.shape[0]))
         random.shuffle(shuffled)
@@ -129,6 +137,11 @@ class DondersData:
         random.shuffle(shuffled)
         self.x_val_t = val_ep[shuffled, :, :]
         self.sub_id['val'] = np.array(self.sub_id['val'])[shuffled]
+
+        shuffled = list(range(test_ep.shape[0]))
+        random.shuffle(shuffled)
+        self.x_test_t = test_ep[shuffled, :, :]
+        self.sub_id['test'] = np.array(self.sub_id['test'])[shuffled]
 
         print('Good samples: ', sum([x.shape[1] for x in x_trains + x_vals]),
               flush=True)
@@ -181,6 +194,10 @@ class DondersData:
         # helper for getting a validation batch
         return self.get_batch(i, self.x_val_t, 'val')
 
+    def get_test_batch(self, i):
+        # helper for getting a validation batch
+        return self.get_batch(i, self.x_test_t, 'test')
+
     def find_bs(self, bs, shape):
         '''
         Convinience function for setting the batch size.
@@ -197,27 +214,37 @@ class DondersData:
         # set common parameters
         bs = self.args.batch_size
         self.bs = {'train': self.find_bs(bs, self.x_train_t.shape[0]),
-                   'val': self.find_bs(bs, self.x_val_t.shape[0])}
+                   'val': self.find_bs(bs, self.x_val_t.shape[0]),
+                   'test': self.find_bs(bs, self.x_test_t.shape[0])}
 
         print('Train batch size: ', self.bs['train'])
         print('Validation batch size: ', self.bs['val'])
 
         self.train_batches = int(self.x_train_t.shape[0] / self.bs['train'])
         self.val_batches = int(self.x_val_t.shape[0] / self.bs['val'])
+        self.test_batches = int(self.x_test_t.shape[0] / self.bs['test'])
 
         try:
             self.x_train_t = torch.Tensor(self.x_train_t).float().cuda()
             self.x_val_t = torch.Tensor(self.x_val_t).float().cuda()
+            self.x_test_t = torch.Tensor(self.x_test_t).float().cuda()
             self.sub_id['train'] = torch.LongTensor(self.sub_id['train']).cuda()
             self.sub_id['val'] = torch.LongTensor(self.sub_id['val']).cuda()
-        except:
+            self.sub_id['test'] = torch.LongTensor(self.sub_id['test']).cuda()
+            print('Data loaded on gpu.')
+        except Exception:
+            traceback.print_exc()
             self.x_train_t = torch.Tensor(self.x_train_t).float()
             self.x_val_t = torch.Tensor(self.x_val_t).float()
+            self.x_test_t = torch.Tensor(self.x_test_t).float()
             self.sub_id['train'] = torch.LongTensor(self.sub_id['train'])
             self.sub_id['val'] = torch.LongTensor(self.sub_id['val'])
+            self.sub_id['test'] = torch.LongTensor(self.sub_id['test'])
+            print('Data loaded on cpu.')
 
         self.sub_id['train'] = self.sub_id['train'].reshape(-1)
         self.sub_id['val'] = self.sub_id['val'].reshape(-1)
+        self.sub_id['test'] = self.sub_id['test'].reshape(-1)
 
         if isinstance(self.args.sample_rate, list):
             w = self.args.sample_rate[1] - self.args.sample_rate[0]
