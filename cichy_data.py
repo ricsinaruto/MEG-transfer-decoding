@@ -78,19 +78,28 @@ class CichyData(MRCData):
             # reshape for PCA
             x_train = self.x_train_t[:, :num_ch, :].transpose(0, 2, 1)
             x_val = self.x_val_t[:, :num_ch, :].transpose(0, 2, 1)
+            x_test = self.x_test_t[:, :num_ch, :].transpose(0, 2, 1)
             x_train = x_train.reshape(-1, num_ch)
             x_val = x_val.reshape(-1, num_ch)
+            x_test = x_test.reshape(-1, num_ch)
 
-            x_train, x_val = self.whiten(x_train, x_val)
+            # change dim red temporarily
+            dim_red = args.dim_red
+            args.dim_red = num_ch
+            x_train, x_val, x_test = self.whiten(x_train, x_val, x_test)
+            args.dim_red = dim_red
 
             # reshape back to trials
-            x_train = x_train.reshape(-1, self.args.sample_rate, num_ch)
-            x_val = x_val.reshape(-1, self.args.sample_rate, num_ch)
+            x_train = x_train.reshape(-1, args.sample_rate, num_ch)
+            x_val = x_val.reshape(-1, args.sample_rate, num_ch)
+            x_test = x_test.reshape(-1, args.sample_rate, num_ch)
             x_train = x_train.transpose(0, 2, 1)
             x_val = x_val.transpose(0, 2, 1)
+            x_test = x_test.transpose(0, 2, 1)
 
             self.x_train_t[:, :num_ch, :] = x_train
             self.x_val_t[:, :num_ch, :] = x_val
+            self.x_test_t[:, :num_ch, :] = x_test
 
         args.num_channels = args.num_channels[:-1]
 

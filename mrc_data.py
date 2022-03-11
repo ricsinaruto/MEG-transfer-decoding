@@ -64,24 +64,22 @@ class MRCData(DondersData):
         x_val = norm.transform(x_val)
         x_test = norm.transform(x_test)
 
-        return x_train, x_test
+        return x_train, x_val, x_test
 
     def normalize(self, x_train, x_val, x_test):
         '''
         Standardize and whiten data if needed.
         '''
         # standardize dataset along channels
-        chn = len(self.args.num_channels) - 1
         norm = StandardScaler()
-        norm.fit(x_train[:, :chn])
-        x_train[:, :chn] = norm.transform(x_train[:, :chn])
-        x_val[:, :chn] = norm.transform(x_val[:, :chn])
-        x_test[:, :chn] = norm.transform(x_test[:, :chn])
+        norm.fit(x_train)
+        x_train = norm.transform(x_train)
+        x_val = norm.transform(x_val)
+        x_test = norm.transform(x_test)
 
         # if needed, remove covariance with PCA
         if self.args.whiten:
-            x_train[:, :chn], x_val[:, :chn], x_test[:, :chn] = \
-                self.whiten(x_train[:, :chn], x_val[:, :chn], x_test[:, :chn])
+            x_train, x_val, x_test = self.whiten(x_train, x_val, x_test)
 
         return x_train.T, x_val.T, x_test.T
 

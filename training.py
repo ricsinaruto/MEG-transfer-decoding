@@ -154,6 +154,11 @@ class Experiment:
         self.model.end()
         self.save_validation()
 
+        # delete model and dataset
+        del self.model
+        del self.dataset
+        torch.cuda.empty_cache()
+
     def testing(self):
         '''
         Evaluate model on the validation dataset.

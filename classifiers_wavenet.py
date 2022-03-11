@@ -8,7 +8,7 @@ from wavenets_simple import WavenetSimple, WavenetSimpleSTS, ConvPoolNet
 from wavenets_simple import WavenetSimpleSembConcat, WavenetSimpleSembAdd
 from wavenets_simple import WavenetSimpleSembMult, WavenetSimpleChetSemb
 from wavenets_full import WavenetSimpleSkips
-from classifiers_simpleNN import SimpleClassifier, ClassifierModule, accuracy
+from classifiers_simpleNN import SimpleClassifier, SimpleClassifierTimeEncoding, ClassifierModule, accuracy
 
 
 class WavenetClassifier(SimpleClassifier):
@@ -64,6 +64,24 @@ class ConvPoolClassifier(WavenetClassifier):
         x = self.classifier(x.reshape(x.shape[0], -1))
 
         return output, x
+
+
+class ConvPoolTimeEncoding(ConvPoolClassifier, SimpleClassifierTimeEncoding):
+    def build_model(self, args):
+        chn = args.num_channels
+        args.num_channels += args.pos_enc_d
+        self.wavenet = ConvPoolNet(args)
+        args.num_channels = chn
+
+        self.class_dim = self.wavenet.ch * self.output_size(args)
+        self.classifier = ClassifierModule(args, self.class_dim)
+
+    def forward(self, x, sid=None):
+        '''
+        Run a dimension reduction over the channels then run the classifier.
+        '''
+        x = self.embed(x)
+        return ConvPoolClassifier.forward(self, x, sid)
 
 
 class WavenetClassifierClamped(WavenetClassifier):
