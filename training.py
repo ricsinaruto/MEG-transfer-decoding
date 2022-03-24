@@ -16,6 +16,9 @@ from torch.optim import Adam
 from loss import Loss
 from classifiers_linear import LDA
 
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
 
 class Experiment:
     def __init__(self, args):
@@ -153,11 +156,6 @@ class Experiment:
         # wrap up training and save validation loss
         self.model.end()
         self.save_validation()
-
-        # delete model and dataset
-        del self.model
-        del self.dataset
-        torch.cuda.empty_cache()
 
     def testing(self):
         '''
@@ -889,22 +887,56 @@ class Experiment:
             f.write('\n'.join(loss_list))
 
     def model_inversion(self):
+        def diag_block_mat(L):
+            shp = L[0].shape
+            N = len(L)
+            r = range(N)
+            out = np.zeros((N, shp[0], N, shp[1]))
+            out[r, :, r, :] = L
+            return out.reshape(np.asarray(shp)*N)
+
+        # get data covariance
+        ts = self.dataset.x_val_t.shape[2]
+        data = self.dataset.x_val_t[:, :-1, :]
+        data = data.reshape(self.dataset.x_val_t.shape[0], -1)
+        data_cov = np.cov(data.cpu().numpy().T)
+
+        # apply pca
+        '''
+        pca = PCA()
+        pca.fit(x_train)
+        x_val = pca.transform(x_val)
+
+        # standardize output
+        norm.fit(x_train)
+        x_val = norm.transform(x_val)
+        '''
+
+        # transform conv_weights from 306x80 to 306*50 x 80*50
         weights = self.model.model.coef_.T
+        conv_w = self.model.spatial_conv.weight.detach().cpu().numpy()
+        conv_w = conv_w.squeeze().T
+        conv_w = diag_block_mat([conv_w] * ts)
+
+        # get latent factors covariance
         data, target, outputs = self.model.get_output(self.dataset.x_val_t)
-        print(data.shape)
+        output_cov = np.linalg.inv(np.cov(outputs.T))
+
+        print(data_cov.shape)
+        print(conv_w.shape)
+        print(weights.shape)
+        print(output_cov.shape)
+
+        patterns = np.einsum('mm, mc, ck, kk -> mk',
+                             data_cov, conv_w, weights, output_cov)
 
         '''
-        data_cov = np.cov(data.T)
-        output_cov = np.cov(outputs.T)
-
-        patterns = np.einsum('mm, mk, kk -> mk',
-                             data_cov, weights, np.linalg.inv(output_cov))
-        '''
-
+        # simplified
         data = self.dataset.x_val_t.reshape(data.shape[0], -1).cpu().numpy()
         patterns = []
         for i in range(data.shape[1]):
             patterns.append(np.cov(data[:, i], target))
+        '''
 
         path = os.path.join(self.args.result_dir, 'patterns.npy')
         np.save(path, np.array(patterns))
@@ -971,6 +1003,9 @@ def main(Args):
         args_pass.split = checklist(args.split, i)
         args_pass.stft_freq = checklist(args.stft_freq, i)
 
+        if isinstance(args.num_channels[0], list):
+            args_pass.num_channels = args.num_channels[i]
+
         # skip if subject does not exist
 
         if not isinstance(d_path, list):
@@ -1030,3 +1065,8 @@ def main(Args):
             e.model_inversion()
 
         e.save_embeddings()
+
+        # delete model and dataset
+        del e.model
+        del e.dataset
+        torch.cuda.empty_cache()

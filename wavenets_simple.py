@@ -6,7 +6,7 @@ import torch
 import random
 import pickle
 
-from torch.nn import Sequential, Module, Conv1d, MaxPool1d
+from torch.nn import Sequential, Module, Conv1d, MaxPool1d, Dropout
 from torch.nn import MSELoss, LogSoftmax, Dropout2d, Embedding, Linear
 from torch.optim import Adam
 import torch.nn.functional as F
@@ -984,6 +984,23 @@ class WavenetSimpleSembConcat(WavenetSimple):
         self.kernel_network_FIR_loop(folder, data)
 
 
+class WavenetSembDrop(WavenetSimpleSembConcat):
+    def embed(self, x, sid):
+        # concatenate subject embeddings with input data
+        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+        sid = self.subject_emb(sid).permute(0, 2, 1)
+
+        # dropout whole embeddings
+        inds = np.arange(sid.shape[0])
+        np.random.shuffle(inds)
+        inds = inds[:int(len(inds)*self.args.p_drop)]
+        sid[inds, :, :] = 0
+
+        x = torch.cat((x, sid), dim=1)
+
+        return x
+
+
 class WavenetSimpleSembNonlinear1(WavenetSimpleSembConcat):
     def forward(self, x, sid=None):
         '''
@@ -1242,6 +1259,28 @@ class ConvPoolNet(WavenetSimple):
         '''
         sr = int(self.args.sr_data / 2**i)
         return signal.freqz(b=filter_coeff, fs=sr, worN=5*sr)
+
+
+class ConvPoolNetSemb(ConvPoolNet, WavenetSimpleSembConcat):
+    def build_model(self, args):
+        self.emb_window = False
+        self.shuffle_embeddings = False
+        self.inp_ch = args.num_channels + args.embedding_dim
+        super(ConvPoolNetSemb, self).build_model(args)
+
+    def forward(self, x, sid=None):
+        if sid is None:
+            torch.LongTensor([0]).cuda()
+
+        x = self.embed(x, sid)
+        return super(ConvPoolNetSemb, self).forward(x)
+
+    def forward4(self, x, sid=None):
+        if sid is None:
+            torch.LongTensor([0]).cuda()
+
+        x = self.embed(x, sid)
+        return super(ConvPoolNetSemb, self).forward4(x)
 
 
 class Conv1PoolNet(ConvPoolNet):

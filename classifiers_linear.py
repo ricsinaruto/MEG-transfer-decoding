@@ -3,6 +3,9 @@ import numpy as np
 
 from mne.time_frequency import tfr_array_morlet
 
+from pyriemann.estimation import XdawnCovariances, ERPCovariances
+from pyriemann.tangentspace import TangentSpace
+
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.svm import SVC, LinearSVC
@@ -26,10 +29,13 @@ class LDA:
 
         # if needed load a model for dimensionality reduction instead of PCA
         if args.load_conv:
-            model = torch.load(args.load_conv)
-            model.loaded(args)
-            model.cuda()
-            self.spatial_conv = model.spatial_conv
+            try:
+                model = torch.load(args.load_conv)
+                model.loaded(args)
+                model.cuda()
+                self.spatial_conv = model.spatial_conv
+            except Exception:
+                print('Couldn\'t load conv model for lda.')
 
     def init_model(self):
         self.model = LinearDiscriminantAnalysis(solver='lsqr',
@@ -84,7 +90,9 @@ class LDA:
     def get_output(self, x_val, window=None):
         _, x_val, y_val = self.eval(x_val)
 
-        return x_val, y_val, self.model.predict_proba(x_val)
+        output = self.model.decision_function(x_val) - self.model.intercept_
+
+        return x_val, y_val, output
 
     def eval(self, x_val, window=None):
         '''
@@ -127,6 +135,53 @@ class LDA:
         data = data.reshape(data.shape[0], -1)
 
         return data
+
+
+class LDA_riemann(LDA):
+    def __init__(self, args):
+        super(LDA_riemann, self).__init__(args)
+        #self.cov = ERPCovariances(estimator='lwf')
+        self.cov = XdawnCovariances(nfilter=8)
+        self.tangent = TangentSpace(metric="riemann")
+
+    def prep_lda(self, data):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+
+        if self.window is not None:
+            data = data[:, self.window[0]:self.window[1], :]
+
+        data = data.transpose(0, 2, 1)
+
+        return data
+
+    def transform_data(self, x_train, x_val):
+        '''
+        Prepare and apply PCA and standardization if needed.
+        '''
+        # prepare data specifically for sklearn classifiers
+        x_train, y_train = self.prepare(x_train)
+        x_val, y_val = self.prepare(x_val)
+
+        # reshape data for LDA
+        x_train = self.prep_lda(x_train)
+        x_val = self.prep_lda(x_val)
+
+        # riemann transform
+        if self.fit_pca:
+            self.cov.fit(x_train, y_train)
+        x_train = self.cov.transform(x_train)
+        x_val = self.cov.transform(x_val)
+
+        # project to tangent space
+        if self.fit_pca:
+            self.tangent.fit(x_train)
+        x_train = self.tangent.transform(x_train)
+        x_val = self.tangent.transform(x_val)
+
+        return x_train, x_val, y_train, y_val
 
 
 class LDA_wavelet(LDA):

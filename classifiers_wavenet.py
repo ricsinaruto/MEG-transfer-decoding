@@ -51,7 +51,7 @@ class ConvPoolClassifier(WavenetClassifier):
         return time_d
 
     def build_model(self, args):
-        self.wavenet = ConvPoolNet(args)
+        self.wavenet = args.wavenet_class(args)
 
         self.class_dim = self.wavenet.ch * self.output_size(args)
         self.classifier = ClassifierModule(args, self.class_dim)

@@ -124,7 +124,7 @@ class CichyData(MRCData):
         x_train = np.concatenate((x_train, dataset[:, split_h:, :, :]),
                                  axis=1)
 
-        return x_train, x_val
+        return x_train, x_val, x_val
 
     def load_data(self, args):
         '''
