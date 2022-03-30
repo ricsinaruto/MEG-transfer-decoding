@@ -106,7 +106,8 @@ class WavenetSimple(Module):
             x = self.dropout2d(x)
         else:
             x = torch.unsqueeze(x, 3)
-            x = torch.squeeze(self.dropout2d(x))
+            x = self.dropout2d(x)
+            x = x[:, :, :, 0]
 
         return x
 

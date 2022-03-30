@@ -18,6 +18,7 @@ from classifiers_linear import LDA
 
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
 
 
 class Experiment:
@@ -36,7 +37,7 @@ class Experiment:
                   flush=True)
             print(self.args.result_dir, flush=True)
         else:
-            os.mkdir(self.args.result_dir)
+            os.makedirs(self.args.result_dir)
             print('New result directory created.', flush=True)
             print(self.args.result_dir, flush=True)
 
@@ -343,8 +344,10 @@ class Experiment:
             x_t = self.dataset.x_train_t.clone()
             x_v = self.dataset.x_val_t.clone()
 
+            end = hw-1 if self.args.halfwin_uneven else hw
+
             # train model on a specific time window
-            acc = self.model.run(x_t, x_v, (i-hw, i+hw))
+            acc = self.model.run(x_t, x_v, (i-hw, i+end))
             print(acc)
             accs.append(str(acc))
 
@@ -697,15 +700,15 @@ class Experiment:
         lda_or_not = isinstance(self.model, LDA)
         val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
 
-        # first permute channels across all timesteps
-        idx = np.random.rand(*val_t[:, :chn, 0].T.shape).argsort(0)
-        for i in range(times):
-            a = shuffled_val_t[:, :chn, i].T
-            out = a[idx, np.arange(a.shape[1])].T
-            shuffled_val_t[:, :chn, i] = out
-
         perm_list = []
         for p in range(self.args.PFI_perms):
+            # first permute channels across all timesteps
+            idx = np.random.rand(*val_t[:, :chn, 0].T.shape).argsort(0)
+            for i in range(times):
+                a = shuffled_val_t[:, :chn, i].T
+                out = a[idx, np.arange(a.shape[1])].T
+                shuffled_val_t[:, :chn, i] = out
+
             loss_list = []
             # slide over the epoch and always permute timesteps within a window
             for i in range(hw, times-hw):
@@ -736,13 +739,10 @@ class Experiment:
         '''
         Newer Permutation Feature Importance (PFI) function for channels.
         '''
-        loss_list = []
         top_chs = self.args.closest_chs
         val_t = self.dataset.x_val_t.clone()
         shuffled_val_t = self.dataset.x_val_t.clone()
         chn = val_t.shape[1] - 1
-        tmin = self.args.pfich_timesteps[0]
-        tmax = self.args.pfich_timesteps[1]
 
         # whether dealing with LDA or deep learning models
         lda_or_not = isinstance(self.model, LDA)
@@ -753,44 +753,54 @@ class Experiment:
         with open(path, 'rb') as f:
             closest_k = pickle.load(f)
 
-        # first permute timesteps across all channels
-        idx = np.random.rand(*val_t[:, 0, :].T.shape).argsort(0)
-        for i in range(chn):
-            a = shuffled_val_t[:, i, :].T
-            out = a[idx, np.arange(a.shape[1])].T
-            shuffled_val_t[:, i, :] = out
-
         # evaluate without channel shuffling
-        loss = val_func(self.dataset.x_val_t)
-        loss_list.append(str(loss))
+        og_loss = val_func(self.dataset.x_val_t)
 
         # loop over channels and permute channels in vicinity of i-th channel
-        for i in range(int(chn/3)):
-            self.dataset.x_val_t = val_t.clone()
+        perm_list = []
+        for p in range(self.args.PFI_perms):
+            # first permute timesteps across all channels
+            idx = np.random.rand(*val_t[:, 0, :].T.shape).argsort(0)
+            for i in range(chn):
+                a = shuffled_val_t[:, i, :].T
+                out = a[idx, np.arange(a.shape[1])].T
+                shuffled_val_t[:, i, :] = out
 
-            # need to select mag and 2 grads
-            a = np.array(closest_k[i]) * 3
-            chn_idx = np.append(np.append(a, a+1), a+2)
+            windows = []
+            for t in self.args.pfich_timesteps:
+                tmin = t[0]
+                tmax = t[1]
+                loss_list = [og_loss]
 
-            # shuffle closest k channels
-            if self.args.PFI_inverse:
-                mask = np.ones(chn+1, np.bool)
-                mask[chn_idx] = 0
-                mask[chn] = 0
-                window = shuffled_val_t[:, mask, tmin:tmax].clone()
-                self.dataset.x_val_t[:, mask, tmin:tmax] = window
-            else:
-                window = shuffled_val_t[:, chn_idx, tmin:tmax].clone()
-                self.dataset.x_val_t[:, chn_idx, tmin:tmax] = window
+                for i in range(int(chn/3)):
+                    self.dataset.x_val_t = val_t.clone()
 
-            loss = val_func(self.dataset.x_val_t)
-            loss_list.append(str(loss))
+                    # need to select mag and 2 grads
+                    a = np.array(closest_k[i]) * 3
+                    chn_idx = np.append(np.append(a, a+1), a+2)
+
+                    # shuffle closest k channels
+                    if self.args.PFI_inverse:
+                        mask = np.ones(chn+1, np.bool)
+                        mask[chn_idx] = 0
+                        mask[chn] = 0
+                        window = shuffled_val_t[:, mask, tmin:tmax].clone()
+                        self.dataset.x_val_t[:, mask, tmin:tmax] = window
+                    else:
+                        window = shuffled_val_t[:, chn_idx, tmin:tmax].clone()
+                        self.dataset.x_val_t[:, chn_idx, tmin:tmax] = window
+
+                    loss = val_func(self.dataset.x_val_t)
+                    loss_list.append(loss)
+
+                windows.append(np.array(loss_list))
+
+            perm_list.append(np.array(windows))
 
         # save accuracies to file
-        name = 'val_loss_PFIch' + str(top_chs) + '.txt'
+        name = 'val_loss_PFIch' + str(top_chs) + '.npy'
         path = os.path.join(self.args.result_dir, name)
-        with open(path, 'w') as f:
-            f.write('\n'.join(loss_list))
+        np.save(path, np.array(perm_list))
 
         '''
         # loop over permutations of other channels than i
@@ -886,6 +896,52 @@ class Experiment:
         with open(path, 'w') as f:
             f.write('\n'.join(loss_list))
 
+    def multi2pair(self):
+        '''
+        Get pairwise accuracies from multiclass model
+        '''
+        hw = self.args.halfwin
+        nc = self.args.num_classes
+        times = self.dataset.x_val_t.shape[2]
+        accs = []
+
+        for i in range(hw, times-hw):
+            # load correct model
+            model_path = os.path.join(
+                '/'.join(self.model_path.split('/')[:-1]), 'model.pt' + str(i))
+            self.model = pickle.load(open(model_path, 'rb'))
+            self.model.loaded(self.args)
+
+            # select input slice
+            x_t = self.dataset.x_train_t.clone()
+            x_v = self.dataset.x_val_t.clone()
+            end = hw-1 if self.args.halfwin_uneven else hw
+
+            # train model on a specific time window
+            probs, targets = self.model.predict(x_v, (i-hw, i+end), x_t)
+
+            pairwise = []
+            for c1 in range(nc):
+                for c2 in range(c1+1, nc):
+                    inds = (targets == c1) | (targets == c2)
+
+                    choice = probs[inds, c1] > probs[inds, c2]
+                    predicted = [c1 if p else c2 for p in choice]
+                    acc = accuracy_score(np.array(predicted), targets[inds])
+                    pairwise.append(acc)
+
+            accs.append(str(np.mean(np.array(pairwise))))
+
+            if 'forest' in self.args.result_dir:
+                with open(model_path, 'wb') as file:
+                    pickle.dump(self.model, file)
+
+        path = os.path.join(self.args.result_dir, 'pairwise.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(accs))
+
+        return accs
+
     def model_inversion(self):
         def diag_block_mat(L):
             shp = L[0].shape
@@ -895,40 +951,73 @@ class Experiment:
             out[r, :, r, :] = L
             return out.reshape(np.asarray(shp)*N)
 
+        self.model.lda_norm = False
+
+        x_train = self.dataset.x_train_t[:, :-1, :2*self.args.halfwin-1]
+        x_train = x_train.permute(0, 2, 1).cpu().numpy()
+
+        x_val = self.dataset.x_val_t[:, :-1, :2*self.args.halfwin-1]
+        x_val = x_val.permute(0, 2, 1).cpu().numpy()
+        ts = x_val.shape[1]
+
         # get data covariance
-        ts = self.dataset.x_val_t.shape[2]
-        data = self.dataset.x_val_t[:, :-1, :]
-        data = data.reshape(self.dataset.x_val_t.shape[0], -1)
-        data_cov = np.cov(data.cpu().numpy().T)
+        #x_val = x_val.reshape(-1, x_val.shape[2]) - self.model.pca.mean_
+        #x_val = x_val.reshape(-1, ts, x_val.shape[1])
+        x_val = x_val.reshape(x_val.shape[0], -1)
+        x_val_cov = np.cov(x_val.T)
+
+        x_train = x_train.reshape(x_train.shape[0], -1)
+        x_train_cov = np.cov(x_train.T)
 
         # apply pca
         '''
-        pca = PCA()
+        pca = PCA(x_train.shape[1])
+        x_train = x_train.transpose(0, 2, 1)
+        x_train = x_train.reshape(-1, x_train.shape[2])
         pca.fit(x_train)
-        x_val = pca.transform(x_val)
-
-        # standardize output
-        norm.fit(x_train)
-        x_val = norm.transform(x_val)
+        x_train = pca.transform(x_train)
         '''
 
-        # transform conv_weights from 306x80 to 306*50 x 80*50
+        # pca into matrix form
+        #pca_w = self.model.pca.components_.T
+        #pca_w = diag_block_mat([pca_w] * ts)
+
+        #print(self.model.model.intercept_)
+
         weights = self.model.model.coef_.T
+        # transform conv_weights from 306x80 to 306*50 x 80*50
+        '''
         conv_w = self.model.spatial_conv.weight.detach().cpu().numpy()
         conv_w = conv_w.squeeze().T
         conv_w = diag_block_mat([conv_w] * ts)
+        '''
+        '''
+        dump_data = '/'.join(self.args.dump_data.split('/')[:-1])
+        dump_data = '_'.join(dump_data.split('_')[:-1]) + '_pca306_nonorm/c'
+        self.args.dump_data = dump_data
+        dataset = self.args.dataset(self.args)
+        '''
 
         # get latent factors covariance
-        data, target, outputs = self.model.get_output(self.dataset.x_val_t)
-        output_cov = np.linalg.inv(np.cov(outputs.T))
+        w = (0, 2*self.args.halfwin)
+        #data, target, outputs = self.model.get_output(self.dataset.x_val_t, w)
 
-        print(data_cov.shape)
-        print(conv_w.shape)
+        # compare outputs
+        #outputs2 = np.einsum('bm, mc, ck -> bk',
+        #                     x_val[:, :], pca_w, weights)
+        outputs2 = x_train @ weights
+        output_cov = np.linalg.inv(np.cov(outputs2.T))
+
+        #print(outputs[0, :100])
+        #print(outputs2[0, :100])
+
+        print(x_train_cov.shape)
+        #print(pca_w.shape)
         print(weights.shape)
         print(output_cov.shape)
 
-        patterns = np.einsum('mm, mc, ck, kk -> mk',
-                             data_cov, conv_w, weights, output_cov)
+        patterns = np.einsum('mm, mk, kk -> mk',
+                             x_train_cov, weights, output_cov)
 
         '''
         # simplified
@@ -968,7 +1057,7 @@ class Experiment:
 
     def save_embeddings(self):
         # only run this if there are multiple subjects
-        if self.args.subjects > 0:
+        if self.args.subjects > 0 and self.args.embedding_dim > 0:
             self.model.save_embeddings()
 
 
@@ -1000,73 +1089,82 @@ def main(Args):
         args_pass.learning_rate = checklist(args.learning_rate, i)
         args_pass.load_conv = checklist(args.load_conv, i)
         args_pass.compare_model = checklist(args.compare_model, i)
-        args_pass.split = checklist(args.split, i)
         args_pass.stft_freq = checklist(args.stft_freq, i)
 
         if isinstance(args.num_channels[0], list):
             args_pass.num_channels = args.num_channels[i]
+        if isinstance(args.subjects_data, list):
+            if isinstance(args.subjects_data[0], list):
+                args_pass.subjects_data = args.subjects_data[i]
 
         # skip if subject does not exist
-
         if not isinstance(d_path, list):
             if not (os.path.isfile(d_path) or os.path.isdir(d_path)):
                 print('Skipping ' + d_path, flush=True)
                 continue
 
-        e = Experiment(args_pass)
+        num_loops = len(args.split) if isinstance(args.split, list) else 1
 
-        # only run the functions specified in args
-        if Args.func['repeat_baseline']:
-            e.input_freq()
-            e.repeat_baseline()
-        if Args.func['AR_baseline']:
-            e.AR_baseline()
-        if Args.func['LDA_baseline']:
-            e.lda_baseline()
-        if Args.func['LDA_pairwise']:
-            e.lda_pairwise()
-        if Args.func['train']:
-            e.train()
-        if Args.func['analyse_kernels']:
-            e.analyse_kernels()
-        if Args.func['plot_kernels']:
-            e.plot_kernels()
-        if Args.func['generate']:
-            e.generate()
-        if Args.func['recursive']:
-            e.recursive()
-        if Args.func['kernel_network_FIR']:
-            e.kernel_network_FIR()
-        if Args.func['kernel_network_IIR']:
-            e.kernel_network_IIR()
-        if Args.func['feature_importance']:
-            e.feature_importance()
-        if Args.func['save_validation_subs']:
-            e.save_validation_subs()
-        if Args.func['save_validation_ch']:
-            e.save_validation_channels()
-        if Args.func['pca_sensor_loss']:
-            e.pca_sensor_loss()
-        if Args.func['compare_layers']:
-            e.compare_layers()
-        if Args.func['test']:
-            e.test()
-        if Args.func['LDA_eval']:
-            e.lda_eval()
-        if Args.func['window_eval']:
-            e.window_eval()
-        if Args.func['PFIts']:
-            e.PFIts()
-        if Args.func['PFIch']:
-            e.PFIch()
-        if Args.func['PFIemb']:
-            e.PFIemb()
-        if Args.func['model_inversion']:
-            e.model_inversion()
+        for n in range(num_loops):
+            args_pass.split = checklist(args.split, n)
+            args_pass.result_dir = os.path.join(
+                args_pass.result_dir, 'cv' + str(n))
+            e = Experiment(args_pass)
 
-        e.save_embeddings()
+            # only run the functions specified in args
+            if Args.func['repeat_baseline']:
+                e.input_freq()
+                e.repeat_baseline()
+            if Args.func['AR_baseline']:
+                e.AR_baseline()
+            if Args.func['LDA_baseline']:
+                e.lda_baseline()
+            if Args.func['LDA_pairwise']:
+                e.lda_pairwise()
+            if Args.func['train']:
+                e.train()
+            if Args.func['analyse_kernels']:
+                e.analyse_kernels()
+            if Args.func['plot_kernels']:
+                e.plot_kernels()
+            if Args.func['generate']:
+                e.generate()
+            if Args.func['recursive']:
+                e.recursive()
+            if Args.func['kernel_network_FIR']:
+                e.kernel_network_FIR()
+            if Args.func['kernel_network_IIR']:
+                e.kernel_network_IIR()
+            if Args.func['feature_importance']:
+                e.feature_importance()
+            if Args.func['save_validation_subs']:
+                e.save_validation_subs()
+            if Args.func['save_validation_ch']:
+                e.save_validation_channels()
+            if Args.func['pca_sensor_loss']:
+                e.pca_sensor_loss()
+            if Args.func['compare_layers']:
+                e.compare_layers()
+            if Args.func['test']:
+                e.test()
+            if Args.func['LDA_eval']:
+                e.lda_eval()
+            if Args.func['window_eval']:
+                e.window_eval()
+            if Args.func['PFIts']:
+                e.PFIts()
+            if Args.func['PFIch']:
+                e.PFIch()
+            if Args.func['PFIemb']:
+                e.PFIemb()
+            if Args.func['model_inversion']:
+                e.model_inversion()
+            if Args.func['multi2pair']:
+                e.multi2pair()
 
-        # delete model and dataset
-        del e.model
-        del e.dataset
-        torch.cuda.empty_cache()
+            e.save_embeddings()
+
+            # delete model and dataset
+            del e.model
+            del e.dataset
+            torch.cuda.empty_cache()

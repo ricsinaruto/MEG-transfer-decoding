@@ -48,8 +48,8 @@ class MRCData(DondersData):
         '''
         Apply pca to training and validation data.
         '''
-        self.args.num_channels = list(range(self.args.dim_red))
-        pca = PCA(self.args.dim_red)
+        self.args.num_channels = list(range(self.args.whiten))
+        pca = PCA(self.args.whiten)
         norm = StandardScaler()
 
         # apply PCA

@@ -6,8 +6,8 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/subj2/sess3_1/maxfiltered"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/subj2/sess3_1/preproc25hz"
+dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/s3/maxfiltered"
+outdir = "/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_all_eeg_badchan"
 
 osl_outdir = os.path.join(outdir, 'oslpy')
 report_dir = os.path.join(osl_outdir, 'report')
@@ -24,13 +24,14 @@ meta:
         words/toilet: 5
         words/pain: 6
 preproc:
-  - filter:         {l_freq: 0.1, h_freq: 25}
+  - filter:         {l_freq: 0.1, h_freq: 40}
   - notch_filter:   {freqs: '50'}
   - bad_channels:   {picks: 'mag'}
   - bad_channels:   {picks: 'grad'}
   - bad_channels:   {picks: 'eeg'}
-  - bad_segments:   {segment_len: 800, picks: 'mag'}
-  - bad_segments:   {segment_len: 800, picks: 'grad'}
+  - bad_segments:   {segment_len: 800, picks: 'eeg'}
+  - ica_raw:        {picks: 'eeg', n_components: 32}
+  - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
   - find_events:    {min_duration: 0.002}
 """
 
@@ -59,10 +60,10 @@ for f in files:
     epochs = mne.Epochs(raw,
                         dataset['events'],
                         event_id=dataset['event_id'],
-                        tmin=-0.4,
+                        tmin=-0.1,
                         tmax=1.6,
                         baseline=None,
-                        picks=['meg'],
+                        picks=['eeg'],
                         reject=None,
                         preload=True)
 

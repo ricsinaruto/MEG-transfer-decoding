@@ -42,8 +42,7 @@ class DondersData:
         # load pickled data directly, no further processing required
         if args.load_data:
             self.load_mat_data(args)
-            args.num_channels = len(args.num_channels)
-            self.set_common()
+            self.set_common(args)
             return
 
         # load the raw subject data
@@ -152,7 +151,7 @@ class DondersData:
             os.mkdir(os.path.split(args.dump_data)[0])
 
         self.save_data()
-        self.set_common()
+        self.set_common(args)
 
     def save_data(self):
         '''
@@ -210,8 +209,10 @@ class DondersData:
             if not shape % (bs - i):
                 return bs - i
 
-    def set_common(self):
+    def set_common(self, args=None):
         # set common parameters
+        self.args.num_channels = len(self.args.num_channels)
+
         bs = self.args.batch_size
         self.bs = {'train': self.find_bs(bs, self.x_train_t.shape[0]),
                    'val': self.find_bs(bs, self.x_val_t.shape[0]),

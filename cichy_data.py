@@ -13,12 +13,22 @@ class CichyData(MRCData):
     '''
     Class for loading the trials from the Cichy dataset.
     '''
+    def set_subjects(self, split):
+        inds = np.in1d(self.sub_id[split], self.args.subjects_data)
+        self.sub_id[split] = self.sub_id[split][:, inds]
+
+        if split == 'train':
+            self.x_train_t = self.x_train_t[inds]
+        elif split == 'val':
+            self.x_val_t = self.x_val_t[inds]
+        elif split == 'test':
+            self.x_test_t = self.x_test_t[inds]
+
     def load_mat_data(self, args):
         '''
         Loads ready-to-train splits from mat files.
         '''
         chn = args.num_channels
-        num_ch = len(chn) - 1
         x_train_ts = []
         x_val_ts = []
         x_test_ts = []
@@ -49,6 +59,18 @@ class CichyData(MRCData):
             self.sub_id['test'] = self.sub_id['val']
         else:
             self.x_test_t = np.concatenate(tuple(x_test_ts), axis=1)
+
+    def set_common(self, args):
+        if not isinstance(args.num_channels, list):
+            args.num_channels = list(range(args.num_channels+1))
+
+        num_ch = len(args.num_channels) - 1
+
+        # select wanted subjects
+        if args.subjects_data:
+            self.set_subjects('train')
+            self.set_subjects('val')
+            self.set_subjects('test')
 
         # crop data
         tmin = args.sample_rate[0]
@@ -103,18 +125,22 @@ class CichyData(MRCData):
 
         args.num_channels = args.num_channels[:-1]
 
+        super(CichyData, self).set_common()
+
     def save_data(self):
         '''
         Save final data to disk for easier loading next time.
         '''
-        for i in range(self.x_train_t.shape[1]):
-            dump = {'x_train_t': self.x_train_t[:, i:i+1:, :],
-                    'x_val_t': self.x_val_t[:, i:i+1, :],
-                    'x_test_t': self.x_test_t[:, i:i+1, :],
-                    'sub_id_train': self.sub_id['train'],
-                    'sub_id_val': self.sub_id['val'],
-                    'sub_id_test': self.sub_id['test']}
-            savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
+        if self.args.save_data:
+            for i in range(self.x_train_t.shape[1]):
+                dump = {'x_train_t': self.x_train_t[:, i:i+1:, :],
+                        'x_val_t': self.x_val_t[:, i:i+1, :],
+                        'x_test_t': self.x_test_t[:, i:i+1, :],
+                        'sub_id_train': self.sub_id['train'],
+                        'sub_id_val': self.sub_id['val'],
+                        'sub_id_test': self.sub_id['test']}
+
+                savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
 
     def splitting(self, dataset, args):
         split_l = int(args.split[0] * dataset.shape[1])
@@ -131,7 +157,9 @@ class CichyData(MRCData):
         Load trials for each condition from multiple subjects.
         '''
         # whether we are working with one subject or a directory of them
-        if 'sub' in args.data_path:
+        if isinstance(args.data_path, list):
+            paths = args.data_path
+        elif 'sub' in args.data_path:
             paths = [args.data_path]
         else:
             paths = os.listdir(args.data_path)

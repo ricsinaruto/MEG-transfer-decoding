@@ -21,6 +21,7 @@ class LDA:
     '''
     def __init__(self, args):
         self.args = args
+        self.lda_norm = True
         self.init_model()
         self.fit_pca = True
         self.pca = PCA(args.dim_red)
@@ -44,6 +45,7 @@ class LDA:
 
     def loaded(self, args):
         self.args = args
+        self.lda_norm = True
 
     def run(self, x_train, x_val, window=None):
         '''
@@ -76,10 +78,11 @@ class LDA:
             x_val = self.pca.transform(x_val)
 
             # standardize the output of PCA
-            if self.fit_pca:
-                self.norm.fit(x_train)
-            x_train = self.norm.transform(x_train)
-            x_val = self.norm.transform(x_val)
+            if self.lda_norm:
+                if self.fit_pca:
+                    self.norm.fit(x_train)
+                x_train = self.norm.transform(x_train)
+                x_val = self.norm.transform(x_val)
 
         # reshape data for LDA
         x_train = self.prep_lda(x_train)
@@ -88,11 +91,23 @@ class LDA:
         return x_train, x_val, y_train, y_val
 
     def get_output(self, x_val, window=None):
-        _, x_val, y_val = self.eval(x_val)
+        '''
+        Get LDA-ready input.
+        '''
+        _, x_val, y_val = self.eval(x_val, window)
 
-        output = self.model.decision_function(x_val) - self.model.intercept_
+        #output = self.model.decision_function(x_val) - self.model.intercept_
+        output = x_val
 
         return x_val, y_val, output
+
+    def predict(self, x_val, window=None):
+        '''
+        Predict class labels.
+        '''
+        _, x_val, y_val = self.eval(x_val, window)
+
+        return self.model.predict_proba(x_val), y_val
 
     def eval(self, x_val, window=None):
         '''
@@ -103,7 +118,8 @@ class LDA:
 
         if not self.args.load_conv:
             x_val = self.pca.transform(x_val)
-            x_val = self.norm.transform(x_val)
+            if self.lda_norm:
+                x_val = self.norm.transform(x_val)
 
         x_val = self.prep_lda(x_val)
         return self.model.score(x_val, y_val), x_val, y_val
@@ -283,14 +299,23 @@ class LDA_wavelet_forest(LDA_wavelet_freq):
             y_preds_v.append(self.model.predict(x_val[f, :, :]))
 
         # fit random forest on all frequencies
-        forest = RandomForestClassifier()
+        self.forest = RandomForestClassifier()
         y_preds_t = np.array(y_preds_t)
         y_preds_v = np.array(y_preds_v)
 
-        forest.fit(y_preds_t.T, y_train)
-        acc = forest.score(y_preds_v.T, y_val)
+        self.forest.fit(y_preds_t.T, y_train)
+        acc = self.forest.score(y_preds_v.T, y_val)
 
-        return acc
+        return acc, y_preds_v.T, y_val
+
+    def predict(self, x_val, window=None, x_train=None):
+        '''
+        Predict class labels.
+        '''
+        acc, y_preds, y_val = self.run(x_train, x_val, window)
+        proba = self.forest.predict_proba(y_preds)
+
+        return proba, y_val
 
 
 class LogisticReg(LDA):
