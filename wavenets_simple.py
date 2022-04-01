@@ -226,7 +226,7 @@ class WavenetSimple(Module):
         '''
         x = self.layer_output(x, num_l-1)
         x = self.activation(self.dropout(x))
-        x = self.run_kernel(x, self.cnn_layers[num_l], num_f)
+        x = self.run_kernel_multi(x, self.cnn_layers[num_l], num_f)
 
         return -torch.mean(x)
 
@@ -245,18 +245,18 @@ class WavenetSimple(Module):
         '''
         self.eval()
         indiv = self.args.individual
-        chid = self.args.channel_idx
+        hid_ch = self.args.ch_mult * self.args.num_channels
         input_len = self.args.generate_length
 
-        folder = os.path.join(self.args.result_dir,
-                              'kernel_analysis_ch' + str(chid))
+        folder = os.path.join(self.args.result_dir, 'kernel_analysis')
         if not os.path.isdir(folder):
             os.mkdir(folder)
 
         func = self.kernel_output if indiv else self.channel_output
-        num_filters = self.args.ch_mult**2 if indiv else self.args.ch_mult
+        num_filters = self.args.kernel_limit if indiv else hid_ch
         figsize = (15, 10*num_filters)
 
+        losses = []
         # loop over all layers and kernels in the model
         for num_layer in range(len(self.args.dilations)):
             fig, axs = plt.subplots(num_filters+1, figsize=figsize)
@@ -269,6 +269,7 @@ class WavenetSimple(Module):
                     device='cuda')
                 optimizer = Adam([batch], lr=self.args.anal_lr)
 
+                losses_in = []
                 for epoch in range(self.args.anal_epochs):
                     # if we don't clamp the input would explode
                     with torch.no_grad():
@@ -284,20 +285,27 @@ class WavenetSimple(Module):
 
                     if not epoch % 20:
                         print('Filter loss: ', loss.item())
+                    losses_in.append(loss.item())
 
                 # save learned input to disk
-                inputs = batch.view(-1).detach().cpu().numpy()
+                inputs = batch.squeeze().detach().cpu().numpy()
                 name = str(num_layer) + '_' + str(num_filter) + '.mat'
                 savemat(os.path.join(folder, name), {'X': inputs})
 
                 # compute fft of learned input
-                self.plot_welch(inputs, axs[num_filter], num_layer)
+                #self.plot_welch(inputs, axs[num_filter], num_layer)
+                losses.append(np.array(losses_in))
 
+            '''
             name = '_indiv' if indiv else ''
             filename = os.path.join(
                 folder, 'layer' + str(num_layer) + name + '_freq.svg')
             fig.savefig(filename, format='svg', dpi=2400)
             plt.close('all')
+            '''
+
+        # save losses
+        savemat(os.path.join(folder, 'losses.mat'), {'L': losses})
 
     def generate_forward(self, inputs, channels):
         '''

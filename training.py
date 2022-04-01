@@ -6,6 +6,7 @@ import sails
 import torch
 import random
 import pickle
+from copy import deepcopy
 
 from scipy import signal
 from scipy.io import savemat
@@ -347,7 +348,7 @@ class Experiment:
             end = hw-1 if self.args.halfwin_uneven else hw
 
             # train model on a specific time window
-            acc = self.model.run(x_t, x_v, (i-hw, i+end))
+            acc, _, _ = self.model.run(x_t, x_v, (i-hw, i+end))
             print(acc)
             accs.append(str(acc))
 
@@ -1106,10 +1107,16 @@ def main(Args):
         num_loops = len(args.split) if isinstance(args.split, list) else 1
 
         for n in range(num_loops):
-            args_pass.split = checklist(args.split, n)
-            args_pass.result_dir = os.path.join(
+            args_new = deepcopy(args_pass)
+            args_new.split = checklist(args.split, n)
+            args_new.result_dir = os.path.join(
                 args_pass.result_dir, 'cv' + str(n))
-            e = Experiment(args_pass)
+
+            if args_new.load_conv:
+                if 'model.pt' not in args_new.load_conv:
+                    args_new.load_conv = os.path.join(
+                        args_new.load_conv, 'cv' + str(n), 'model.pt')
+            e = Experiment(args_new)
 
             # only run the functions specified in args
             if Args.func['repeat_baseline']:

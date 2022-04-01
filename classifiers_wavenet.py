@@ -22,6 +22,9 @@ class WavenetClassifier(SimpleClassifier):
     def kernel_network_FIR(self):
         self.wavenet.kernel_network_FIR()
 
+    def analyse_kernels(self):
+        self.wavenet.analyse_kernels()
+
     def build_model(self, args):
         self.wavenet = WavenetSimple(args)
 

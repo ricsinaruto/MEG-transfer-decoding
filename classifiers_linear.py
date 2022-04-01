@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import sys
 
 from mne.time_frequency import tfr_array_morlet
 
@@ -60,7 +61,7 @@ class LDA:
         # validation accuracy
         acc = self.model.score(x_val, y_val)
 
-        return acc
+        return acc, None, None
 
     def transform_data(self, x_train, x_val):
         '''
@@ -133,6 +134,8 @@ class LDA:
         y = data[:, -1, 0].cpu().numpy()
 
         # if needed apply convolutional dimensionality reduction
+        print(np.sum(data[:, :ch, :].cpu().numpy(), axis=0)[305, :10])
+        sys.exit()
         data = self.spatial_conv(data[:, :ch, :]).detach().cpu().numpy()
 
         data = data.transpose(0, 2, 1)
