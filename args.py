@@ -3,19 +3,21 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from classifiers_simpleNN import SimpleClassifier
-from classifiers_wavenet import WavenetClassifier
-from classifiers_linear import LDA
+from classifiers_simpleNN import SimpleClassifier, SimpleClassifierTimeEncoding
+from classifiers_wavenet import WavenetClassifier, WavenetClassPredSemb, WavenetClassifierSemb
+from classifiers_linear import LDA, LDA_wavelet, LDA_wavelet_freq, LDA_wavelet_forest
+from wavenets_simple import WavenetSimpleSembConcat, WavenetSimple
 from cichy_data import CichyData
+from mrc_data import MRCData
 
 
 class Args:
-    gpu = '1'
+    gpu = '0'
     func = {'repeat_baseline': False,
             'AR_baseline': False,
-            'LDA_baseline': False,
+            'LDA_baseline': True,
             'LDA_pairwise': False,
-            'train': True,
+            'train': False,
             'generate': False,
             'recursive': False,
             'analyse_kernels': False,
@@ -32,18 +34,20 @@ class Args:
             'test': False,
             'LDA_eval': False,
             'PFIemb': False,
+            'model_inversion': False,
+            'multi2pair': False,
             'window_eval': False}
 
     def __init__(self):
-        n = 20
+        n = 1
 
         # training arguments
         self.name = 'args.py'
         self.load_dataset = True
         self.learning_rate = 0.00005
         self.max_trials = 1
-        self.batch_size = 10
-        self.epochs = 500
+        self.batch_size = 59
+        self.epochs = 2000
         self.val_freq = 20
         self.print_freq = 5
         self.num_plot = 1
@@ -52,11 +56,10 @@ class Args:
         self.load_model = False
         self.result_dir = [os.path.join(
             'results',
-            'disp_epoched',
-            'subj2',
-            'group_wavenetclass_cv20',
-            'crossval' + str(i)) for i in range(n)]
-        self.model = WavenetClassifier
+            'cichy_epoched',
+            'indiv50hz_lda_conv',
+            'subj' + str(i)) for i in range(n)]
+        self.model = LDA
         self.dataset = CichyData
 
         # wavenet arguments
@@ -65,50 +68,65 @@ class Args:
         self.subjects = 0
         self.embedding_dim = 0
         self.num_samples_CPC = 20
-        self.p_drop = 0.7
+        self.p_drop = 0.6
         self.dropout2d_bad = False
         self.k_CPC = 1
         self.mu = 255
-        self.ch_mult = 1
+        self.ch_mult = 2
         self.groups = 1
         self.conv1x1_groups = 1
         self.kernel_size = 2
         self.timesteps = 1
-        self.sample_rate = [100, 356]
-        self.rf = 16
-        rf = 16
+        self.sample_rate = [0, 100]
+        self.rf = 64
+        rf = 64
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
         self.dilations = [ks**i for i in range(nl)]  # wavenet mode
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
-        self.load_conv = False
+        self.wavenet_class = WavenetSimple
+        self.pos_enc_type = 'cat'
+        self.pos_enc_d = 128
+        self.load_conv = [os.path.join(
+            'results',
+            'cichy_epoched',
+            'indiv50hz_simpleclasslinear',
+            'subj' + str(i),
+            'model.pt') for i in range(n)]
         self.l1_loss = False
         self.pred = False
+        self.init_model = True
+        self.reg_semb = True
+        self.fixed_wavenet = False
         self.alpha_norm = 0.0
-        self.num_classes = 5
-        self.units = [500, 50]
-        self.dim_red = 64
+        self.norm_alpha = 0.0
+        self.num_classes = 118
+        self.units = [1000, 300]
+        self.dim_red = 80
         self.stft_freq = 0
 
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
-                                 'disp_csaky', 's2', 'preproc125hz', 'group_sub')
-        self.data_path = [data_path] * n
+                                 'cichy118_cont', 'preproc_data_onepass', 'lowpass50hz_noise60hz')
+        self.data_path = [os.path.join(data_path, 'subj' + str(i)) for i in range(n)]
         self.num_channels = list(range(307))
+        self.numpy = True
         self.crop = 1
-        self.whiten = False
+        self.whiten = 306
         self.group_whiten = False
-        self.split = self.split = [np.array([i/n, (i+1)/n]) for i in range(n)]
-        self.sr_data = 250
+        self.split = np.array([0, 0.2])
+        self.sr_data = 100
         self.num_components = 0
         self.resample = 7
         self.save_norm = True
         self.norm_path = os.path.join(data_path, 'norm_coeff')
         self.pca_path = os.path.join(data_path, 'pca128_model')
         self.load_pca = False
-        self.dump_data = [os.path.join(data_path, 'train_data_cv' + str(i), 'c') for i in range(n)]
+        self.save_data = True
+        self.subjects_data = False
+        self.dump_data = [os.path.join(d, 'train_data_pca306', 'c') for d in self.data_path]
         self.load_data = self.dump_data
 
         # analysis arguments
@@ -116,7 +134,8 @@ class Args:
         self.PFI_inverse = False
         self.pfich_timesteps = [0, 256]
         self.PFI_perms = 20
-        self.halfwin = 15
+        self.halfwin = 5
+        self.halfwin_uneven = False
         self.compare_model = False
         self.generate_noise = 1
         self.generate_length = self.sr_data * 1000

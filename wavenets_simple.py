@@ -25,6 +25,7 @@ class WavenetSimple(Module):
         self.args = args
         self.inp_ch = args.num_channels
         self.out_ch = args.num_channels
+        self.kernel_inds = []
 
         self.timesteps = args.timesteps
         self.build_model(args)
@@ -39,6 +40,7 @@ class WavenetSimple(Module):
         '''
         When model is loaded from file, assign the new args object.
         '''
+        self.kernel_inds = []
         self.args = args
         self.shuffle_embeddings = False
         self.dropout2d = Dropout2d(args.p_drop)
@@ -220,7 +222,7 @@ class WavenetSimple(Module):
 
         return x
 
-    def kernel_output(self, x, num_l, num_f):
+    def kernel_output_all(self, x, num_l, num_f):
         '''
         Compute the output for a specific layer num_l and kernel num_f.
         '''
@@ -228,6 +230,13 @@ class WavenetSimple(Module):
         x = self.activation(self.dropout(x))
         x = self.run_kernel_multi(x, self.cnn_layers[num_l], num_f)
 
+        return x.detach().cpu()
+
+    def kernel_output(self, x, num_l, num_f):
+        '''
+        Compute the output for a specific layer num_l and kernel num_f.
+        '''
+        x = self.kernel_output_all(x, num_l, num_f)
         return -torch.mean(x)
 
     def plot_welch(self, x, ax, sr=1):
@@ -238,6 +247,25 @@ class WavenetSimple(Module):
         ax.plot(f, Pxx_den)
         for freq in self.args.freqs:
             ax.axvline(x=freq, color='red')
+
+    def kernelPFI(self, data):
+        self.eval()
+
+        if not self.kernel_inds:
+            for _ in range(len(self.args.dilations)):
+                for f in range(self.args.kernel_limit):
+                    inds1 = random.randint(0, self.ch-1)
+                    inds2 = random.randint(0, self.ch-1)
+                    self.kernel_inds.append((inds1, inds2))
+
+        outputs = []
+        for num_layer in range(len(self.args.dilations)):
+            for num_filter in range(self.args.kernel_limit):
+                ind = num_layer*self.args.kernel_limit + num_filter
+                x = self.kernel_output_all(data, num_layer, ind)
+                outputs.append(x)
+
+        return outputs
 
     def analyse_kernels(self):
         '''
@@ -255,6 +283,12 @@ class WavenetSimple(Module):
         func = self.kernel_output if indiv else self.channel_output
         num_filters = self.args.kernel_limit if indiv else hid_ch
         figsize = (15, 10*num_filters)
+
+        # compute inverse of standardization
+        path = os.path.join('/'.join(self.args.dump_data.split('/')[:-1]),
+                            'standardscaler')
+        with open(path, 'rb') as file:
+            norm = pickle.load(file)
 
         losses = []
         # loop over all layers and kernels in the model
@@ -289,6 +323,7 @@ class WavenetSimple(Module):
 
                 # save learned input to disk
                 inputs = batch.squeeze().detach().cpu().numpy()
+                inputs = norm.inverse_transform(inputs.T).T
                 name = str(num_layer) + '_' + str(num_filter) + '.mat'
                 savemat(os.path.join(folder, name), {'X': inputs})
 
@@ -441,8 +476,12 @@ class WavenetSimple(Module):
         in a specific layer (layer) to input x.
         '''
         # input and output filter indices
-        out_filt = random.randint(0, self.ch-1)
-        inp_filt = random.randint(0, self.ch-1)
+        if self.kernel_inds:
+            out_filt = self.kernel_inds[num_kernel][0]
+            inp_filt = self.kernel_inds[num_kernel][1]
+        else:
+            out_filt = random.randint(0, self.ch-1)
+            inp_filt = random.randint(0, self.ch-1)
 
         # deconstruct convolution to get specific kernel output
         x = F.conv1d(x[:, inp_filt:inp_filt + 1, :],

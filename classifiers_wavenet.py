@@ -25,6 +25,9 @@ class WavenetClassifier(SimpleClassifier):
     def analyse_kernels(self):
         self.wavenet.analyse_kernels()
 
+    def kernelPFI(self, data):
+        return self.wavenet.kernelPFI(data)
+
     def build_model(self, args):
         self.wavenet = WavenetSimple(args)
 
@@ -309,9 +312,19 @@ class WavenetClassifierSemb(WavenetClassifier):
         sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
         return sid
 
+    def get_sid_exc(self, sid):
+        '''
+        Get subject embedding of untrained subject
+        '''
+        ind = int(self.args.result_dir.split('_')[-1].split('/')[0])
+        sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
+        return sid
+
     def forward(self, x, sid=None):
         if 'sub' in self.args.result_dir:
             sid = self.get_sid(sid)
+        if 'exc' in self.args.result_dir:
+            sid = self.get_sid_exc(sid)
 
         return super(WavenetClassifierSemb, self).forward(x, sid)
 

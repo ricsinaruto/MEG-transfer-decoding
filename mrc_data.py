@@ -71,11 +71,11 @@ class MRCData(DondersData):
         Standardize and whiten data if needed.
         '''
         # standardize dataset along channels
-        norm = StandardScaler()
-        norm.fit(x_train)
-        x_train = norm.transform(x_train)
-        x_val = norm.transform(x_val)
-        x_test = norm.transform(x_test)
+        self.norm = StandardScaler()
+        self.norm.fit(x_train)
+        x_train = self.norm.transform(x_train)
+        x_val = self.norm.transform(x_val)
+        x_test = self.norm.transform(x_test)
 
         # if needed, remove covariance with PCA
         if self.args.whiten:

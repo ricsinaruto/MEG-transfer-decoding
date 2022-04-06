@@ -102,7 +102,7 @@ class LDA:
 
         return x_val, y_val, output
 
-    def predict(self, x_val, window=None):
+    def predict(self, x_val, window=None, x_t=None):
         '''
         Predict class labels.
         '''
@@ -134,8 +134,6 @@ class LDA:
         y = data[:, -1, 0].cpu().numpy()
 
         # if needed apply convolutional dimensionality reduction
-        print(np.sum(data[:, :ch, :].cpu().numpy(), axis=0)[305, :10])
-        sys.exit()
         data = self.spatial_conv(data[:, :ch, :]).detach().cpu().numpy()
 
         data = data.transpose(0, 2, 1)

@@ -677,14 +677,30 @@ class Experiment:
         with open(path, 'w') as f:
             f.write('\n'.join(loss_list))
 
-    def evaluate_(self, data):
+    def evaluate_(self, data, og=None):
         losses, _, _ = self.evaluate()
         loss = [losses[k] for k in losses if 'Validation accuracy' in k]
         return loss[0]
 
-    def LDA_eval_(self, data):
+    def LDA_eval_(self, data, og=None):
         acc, _, _ = self.model.eval(data)
         return acc
+
+    def kernelPFI(self, data, og=False):
+        ch = self.args.num_channels
+        outputs = self.model.kernelPFI(data[:, :ch, :])
+        num_l = len(self.args.dilations)
+
+        if og:
+            self.kernelPFI_outputs = outputs
+            ret = np.zeros(self.args.kernel_limit*num_l)
+        else:
+            ret = []
+            for og, new in zip(self.kernelPFI_outputs, outputs):
+                ret.append(torch.linalg.norm(og-new).numpy())
+            ret = np.array(ret)
+
+        return ret
 
     def PFIts(self):
         '''
@@ -700,6 +716,8 @@ class Experiment:
         # whether dealing with LDA or deep learning models
         lda_or_not = isinstance(self.model, LDA)
         val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+        if self.args.kernelPFI:
+            val_func = self.kernelPFI
 
         perm_list = []
         for p in range(self.args.PFI_perms):
@@ -730,11 +748,9 @@ class Experiment:
 
             perm_list.append(np.array(loss_list))
 
-        perm_list = np.average(np.array(perm_list), axis=0)
-
-        path = os.path.join(self.args.result_dir, 'val_loss_PFIts.txt')
-        with open(path, 'w') as f:
-            f.write('\n'.join([str(x) for x in perm_list]))
+        # save accuracies to file
+        path = os.path.join(self.args.result_dir, 'val_loss_PFIts.npy')
+        np.save(path, np.array(perm_list))
 
     def PFIch(self):
         '''
@@ -748,6 +764,8 @@ class Experiment:
         # whether dealing with LDA or deep learning models
         lda_or_not = isinstance(self.model, LDA)
         val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+        if self.args.kernelPFI:
+            val_func = self.kernelPFI
 
         # read a file containing closest channels to each channel location
         path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
@@ -755,7 +773,7 @@ class Experiment:
             closest_k = pickle.load(f)
 
         # evaluate without channel shuffling
-        og_loss = val_func(self.dataset.x_val_t)
+        og_loss = val_func(self.dataset.x_val_t, True)
 
         # loop over channels and permute channels in vicinity of i-th channel
         perm_list = []
@@ -1084,10 +1102,7 @@ def main(Args):
         args_pass.pca_path = checklist(args.pca_path, i)
         args_pass.AR_load_path = checklist(args.AR_load_path, i)
         args_pass.load_model = checklist(args.load_model, i)
-        args_pass.max_trials = checklist(args.max_trials, i)
-        args_pass.batch_size = checklist(args.batch_size, i)
         args_pass.p_drop = checklist(args.p_drop, i)
-        args_pass.learning_rate = checklist(args.learning_rate, i)
         args_pass.load_conv = checklist(args.load_conv, i)
         args_pass.compare_model = checklist(args.compare_model, i)
         args_pass.stft_freq = checklist(args.stft_freq, i)
@@ -1105,17 +1120,39 @@ def main(Args):
                 continue
 
         num_loops = len(args.split) if isinstance(args.split, list) else 1
+        split_len = num_loops
+        if isinstance(args.max_trials, list):
+            num_loops = len(args.max_trials)
 
         for n in range(num_loops):
             args_new = deepcopy(args_pass)
-            args_new.split = checklist(args.split, n)
-            args_new.result_dir = os.path.join(
-                args_pass.result_dir, 'cv' + str(n))
+
+            args_new.max_trials = checklist(args_new.max_trials, n)
+            args_new.learning_rate = checklist(args_new.learning_rate, n)
+            args_new.batch_size = checklist(args_new.batch_size, n)
 
             if args_new.load_conv:
                 if 'model.pt' not in args_new.load_conv:
                     args_new.load_conv = os.path.join(
                         args_new.load_conv, 'cv' + str(n), 'model.pt')
+
+            if split_len > 1:
+                args_new.split = checklist(args.split, n)
+                args_new.dump_data = os.path.join(
+                    args_new.dump_data + str(n), 'c')
+                if args_new.load_data:
+                    args_new.load_data = args_new.dump_data
+                args_new.result_dir = os.path.join(
+                    args_pass.result_dir, 'cv' + str(n))
+                if args_new.load_model:
+                    paths = args_pass.load_model.split('/')
+                    args_new.load_model = os.path.join(
+                        '/'.join(paths[:-1]), 'cv' + str(n), paths[-1])
+
+            elif isinstance(args.max_trials, list):
+                name = 'train' + str(args_new.max_trials)
+                args_new.result_dir = os.path.join(args_pass.result_dir, name)
+
             e = Experiment(args_new)
 
             # only run the functions specified in args

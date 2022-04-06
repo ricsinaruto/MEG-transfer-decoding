@@ -2,6 +2,7 @@ import os
 import sys
 import torch
 import random
+import pickle
 import numpy as np
 
 from scipy.io import loadmat, savemat
@@ -141,6 +142,12 @@ class CichyData(MRCData):
                         'sub_id_test': self.sub_id['test']}
 
                 savemat(self.args.dump_data + 'ch' + str(i) + '.mat', dump)
+
+        # save standardscaler
+        path = os.path.join('/'.join(self.args.dump_data.split('/')[:-1]),
+                            'standardscaler')
+        with open(path, 'wb') as file:
+            pickle.dump(self.norm, file)
 
     def splitting(self, dataset, args):
         split_l = int(args.split[0] * dataset.shape[1])
