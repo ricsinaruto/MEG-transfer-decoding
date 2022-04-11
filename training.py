@@ -10,6 +10,7 @@ from copy import deepcopy
 
 from scipy import signal
 from scipy.io import savemat
+from scipy.fft import fft, fftfreq, ifft
 
 from torch.nn import MSELoss
 from torch.optim import Adam
@@ -155,7 +156,9 @@ class Experiment:
                 if self.args.save_curves:
                     self.save_curves()
 
-        # wrap up training and save validation loss
+        # wrap up training, save model and validation loss
+        path = self.model_path.strip('.pt') + '_end.pt'
+        torch.save(self.model, path, pickle_protocol=4)
         self.model.end()
         self.save_validation()
 
@@ -752,6 +755,60 @@ class Experiment:
         path = os.path.join(self.args.result_dir, 'val_loss_PFIts.npy')
         np.save(path, np.array(perm_list))
 
+    def PFIfreq(self):
+        '''
+        Newer Permutation Feature Importance (PFI) function for timesteps.
+        Could also try the inverse, like a combination of PFI and window_eval.
+        '''
+        hw = self.args.halfwin
+        val_t = self.dataset.x_val_t.clone()
+        chn = val_t.shape[1] - 1
+        times = val_t.shape[2]
+
+        # whether dealing with LDA or deep learning models
+        lda_or_not = isinstance(self.model, LDA)
+        val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+        if self.args.kernelPFI:
+            val_func = self.kernelPFI
+
+        # compute fft
+        val_fft = fft(val_t[:, :chn, :].cpu().numpy())
+        shuffled_val_fft = val_fft.copy()
+
+        perm_list = []
+        for p in range(self.args.PFI_perms):
+            # shuffle frequency components across channels
+            idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
+            for i in range(times):
+                a = shuffled_val_fft[:, :, i].T
+                out = a[idx, np.arange(a.shape[1])].T
+                shuffled_val_fft[:, :, i] = out
+
+            loss_list = []
+            # slide over epoch and always permute frequencies within a window
+            for i in range(hw, times//2-hw):
+                self.dataset.x_val_t = val_t.clone()
+                if i > hw:
+                    dataset_val_fft = val_fft.copy()
+                    win1 = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
+                    win2 = shuffled_val_fft[:, :, i-hw+times//2-1:i+hw+times//2].copy()
+                    dataset_val_fft[:, :, i-hw:i+hw+1] = win1
+                    dataset_val_fft[:, :, i-hw+times//2-1:i+hw+times//2] = win2
+
+                    # inverse fourier transform
+                    data = torch.Tensor(ifft(dataset_val_fft))
+                    self.dataset.x_val_t[:, :chn, :] = data
+
+                loss = val_func(self.dataset.x_val_t)
+                loss_list.append(loss)
+
+            perm_list.append(np.array(loss_list))
+
+        # save accuracies to file
+        path = os.path.join(self.args.result_dir,
+                            'val_loss_PFIfreqs' + str(hw*2) + '.npy')
+        np.save(path, np.array(perm_list))
+
     def PFIch(self):
         '''
         Newer Permutation Feature Importance (PFI) function for channels.
@@ -1201,6 +1258,8 @@ def main(Args):
                 e.PFIch()
             if Args.func['PFIemb']:
                 e.PFIemb()
+            if Args.func['PFIfreq']:
+                e.PFIfreq()
             if Args.func['model_inversion']:
                 e.model_inversion()
             if Args.func['multi2pair']:
