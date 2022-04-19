@@ -162,7 +162,7 @@ class SimpleClassifier(Module):
                   'valloss/valcriterion/Validation accuracy: ': acc,
                   'valloss/saveloss/none': 1-acc}
 
-        return losses, out_pred, None
+        return losses, torch.argmax(out_class, dim=-1), targets
 
     def loss_(self, x, i=0, sid=None, train=True, criterion=None):
         # only used for diagnostic purposes

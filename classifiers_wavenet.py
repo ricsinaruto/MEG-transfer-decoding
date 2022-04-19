@@ -25,11 +25,14 @@ class WavenetClassifier(SimpleClassifier):
     def analyse_kernels(self):
         self.wavenet.analyse_kernels()
 
-    def kernelPFI(self, data):
-        return self.wavenet.kernelPFI(data)
+    def kernelPFI(self, data, sid=None):
+        return self.wavenet.kernelPFI(data, sid)
 
     def build_model(self, args):
-        self.wavenet = WavenetSimple(args)
+        if args.wavenet_class:
+            self.wavenet = args.wavenet_class(args)
+        else:
+            self.wavenet = WavenetSimple(args)
 
         self.class_dim = self.wavenet.ch * int(args.sample_rate/args.rf)
         self.classifier = ClassifierModule(args, self.class_dim)

@@ -53,8 +53,6 @@ class WavenetFull(WavenetSimple):
         self.relus = Sequential(*self.relus)
         self.last_conv = Sequential(*self.last_conv)
 
-        self.dropout = Dropout(args.p_drop)
-
     def forward(self, x, sid=None):
         x = self.first_conv(x)
         skips = []
@@ -82,10 +80,10 @@ class WavenetFull(WavenetSimple):
 
         x = self.relus[0](x)
         x = self.last_conv[0](x)
-        x = self.relus[1](x)
-        x = self.last_conv[1](x)
+        out = self.relus[1](x)
+        out = self.last_conv[1](out)
 
-        return x, None
+        return out, x
 
     def kernel_network_FIR_loop(self, folder, x):
         '''
@@ -121,9 +119,8 @@ class WavenetFullSimple(WavenetSimple):
             Conv1d(self.ch, args.num_channels, kernel_size=1)]
 
         self.last_conv = Sequential(*self.last_conv)
-        self.dropout = Dropout(args.p_drop)
 
-    def forward(self, x):
+    def forward(self, x, sid):
         x = self.first_conv(x)
         skips = []
 
@@ -143,10 +140,10 @@ class WavenetFullSimple(WavenetSimple):
 
         x = self.activation(x)
         x = self.last_conv[0](x)
-        x = self.activation(x)
-        x = self.last_conv[1](x)
+        out = self.activation(x)
+        out = self.last_conv[1](out)
 
-        return x, None
+        return out, x
 
     def residual(self, data, data_f):
         '''

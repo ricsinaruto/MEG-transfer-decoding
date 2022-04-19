@@ -184,7 +184,7 @@ class WavenetSimple(Module):
         x = self.layer_output(x, num_l)
         return -torch.mean(x[:, num_c, :])
 
-    def layer_output(self, x, num_l):
+    def layer_output(self, x, num_l, sid=None):
         '''
         Compute the output for a specific layer num_l.
         '''
@@ -222,11 +222,11 @@ class WavenetSimple(Module):
 
         return x
 
-    def kernel_output_all(self, x, num_l, num_f):
+    def kernel_output_all(self, x, num_l, num_f, sid=None):
         '''
         Compute the output for a specific layer num_l and kernel num_f.
         '''
-        x = self.layer_output(x, num_l-1)
+        x = self.layer_output(x, num_l-1, sid)
         x = self.activation(self.dropout(x))
         x = self.run_kernel_multi(x, self.cnn_layers[num_l], num_f)
 
@@ -248,9 +248,7 @@ class WavenetSimple(Module):
         for freq in self.args.freqs:
             ax.axvline(x=freq, color='red')
 
-    def kernelPFI(self, data):
-        self.eval()
-
+    def kernelPFI(self, data, sid=None):
         if not self.kernel_inds:
             for _ in range(len(self.args.dilations)):
                 for f in range(self.args.kernel_limit):
@@ -262,7 +260,7 @@ class WavenetSimple(Module):
         for num_layer in range(len(self.args.dilations)):
             for num_filter in range(self.args.kernel_limit):
                 ind = num_layer*self.args.kernel_limit + num_filter
-                x = self.kernel_output_all(data, num_layer, ind)
+                x = self.kernel_output_all(data, num_layer, ind, sid)
                 outputs.append(x)
 
         return outputs
@@ -476,7 +474,10 @@ class WavenetSimple(Module):
         in a specific layer (layer) to input x.
         '''
         # input and output filter indices
-        if self.kernel_inds:
+        if self.args.kernel_inds:
+            out_filt = self.args.kernel_inds[num_kernel][0]
+            inp_filt = self.args.kernel_inds[num_kernel][1]
+        elif self.kernel_inds:
             out_filt = self.kernel_inds[num_kernel][0]
             inp_filt = self.kernel_inds[num_kernel][1]
         else:
@@ -1001,6 +1002,13 @@ class WavenetSimpleSembConcat(WavenetSimple):
 
         x = self.embed(x, sid)
         return super(WavenetSimpleSembConcat, self).forward4(x)
+
+    def layer_output(self, x, num_l, sid):
+        '''
+        Compute the output for a specific layer num_l.
+        '''
+        x = self.embed(x, sid)
+        return super(WavenetSimpleSembConcat, self).layer_output(x, num_l)
 
     def kernel_network_FIR(self,
                            folder='kernels_network_FIR',

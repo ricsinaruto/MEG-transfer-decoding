@@ -21,6 +21,7 @@ from classifiers_linear import LDA
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
 
 
 class Experiment:
@@ -206,6 +207,8 @@ class Experiment:
         '''
         self.loss.dict = {}
         self.model.eval()
+        outputs = []
+        targets = []
 
         # loop over validation batches
         for i in range(self.dataset.val_batches):
@@ -213,8 +216,11 @@ class Experiment:
             loss, output, target = self.model.loss(batch, i, sid, train=False)
             self.loss.append(loss)
 
+            outputs.append(output)
+            targets.append(target)
+
         losses = self.loss.print('valloss')
-        return losses, output, target
+        return losses, torch.cat(outputs), torch.cat(targets)
 
     def save_validation(self):
         '''
@@ -259,6 +265,16 @@ class Experiment:
             for i in range(self.args.subjects):
                 sub_loss = torch.mean(loss[sid == i]).item()
                 f.write(str(sub_loss) + '\n')
+
+    def confusion_matrix(self):
+        _, outputs, targets = self.evaluate()
+
+        outputs = outputs.detach().cpu().numpy()
+        targets = targets.detach().cpu().numpy()
+
+        mat = confusion_matrix(targets, outputs)
+        path = os.path.join(self.args.result_dir, 'confusion_matrix')
+        np.save(path, mat)
 
     def save_validation_channels(self):
         '''
@@ -690,9 +706,21 @@ class Experiment:
         return acc
 
     def kernelPFI(self, data, og=False):
+        self.model.eval()
         ch = self.args.num_channels
-        outputs = self.model.kernelPFI(data[:, :ch, :])
         num_l = len(self.args.dilations)
+
+        outputs_batch = []
+        for i in range(self.dataset.val_batches):
+            batch, sid = self.dataset.get_val_batch(i)
+            out = self.model.kernelPFI(batch[:, :ch, :], sid)
+            outputs_batch.append(out)
+
+        # concatenate along trial dimension
+        outputs = []
+        for i in range(len(outputs_batch[0])):
+            out = torch.cat([o[i] for o in outputs_batch])
+            outputs.append(out)
 
         if og:
             self.kernelPFI_outputs = outputs
@@ -722,6 +750,9 @@ class Experiment:
         if self.args.kernelPFI:
             val_func = self.kernelPFI
 
+        # evaluate without channel shuffling
+        og_loss = val_func(self.dataset.x_val_t, True)
+
         perm_list = []
         for p in range(self.args.PFI_perms):
             # first permute channels across all timesteps
@@ -731,7 +762,7 @@ class Experiment:
                 out = a[idx, np.arange(a.shape[1])].T
                 shuffled_val_t[:, :chn, i] = out
 
-            loss_list = []
+            loss_list = [og_loss]
             # slide over the epoch and always permute timesteps within a window
             for i in range(hw, times-hw):
                 self.dataset.x_val_t = val_t.clone()
@@ -761,9 +792,8 @@ class Experiment:
         Could also try the inverse, like a combination of PFI and window_eval.
         '''
         hw = self.args.halfwin
-        val_t = self.dataset.x_val_t.clone()
-        chn = val_t.shape[1] - 1
-        times = val_t.shape[2]
+        chn = self.dataset.x_val_t.shape[1] - 1
+        times = self.dataset.x_val_t.shape[2]
 
         # whether dealing with LDA or deep learning models
         lda_or_not = isinstance(self.model, LDA)
@@ -772,8 +802,10 @@ class Experiment:
             val_func = self.kernelPFI
 
         # compute fft
-        val_fft = fft(val_t[:, :chn, :].cpu().numpy())
+        val_fft = fft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
         shuffled_val_fft = val_fft.copy()
+
+        samples = [val_fft[0, 0, :].copy()]
 
         perm_list = []
         for p in range(self.args.PFI_perms):
@@ -787,13 +819,19 @@ class Experiment:
             loss_list = []
             # slide over epoch and always permute frequencies within a window
             for i in range(hw, times//2-hw):
-                self.dataset.x_val_t = val_t.clone()
                 if i > hw:
                     dataset_val_fft = val_fft.copy()
                     win1 = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
-                    win2 = shuffled_val_fft[:, :, i-hw+times//2-1:i+hw+times//2].copy()
                     dataset_val_fft[:, :, i-hw:i+hw+1] = win1
-                    dataset_val_fft[:, :, i-hw+times//2-1:i+hw+times//2] = win2
+
+                    if -i+hw+1 == 0:
+                        win2 = shuffled_val_fft[:, :, -i-hw:].copy()
+                        dataset_val_fft[:, :, -i-hw:] = win2
+                    else:
+                        win2 = shuffled_val_fft[:, :, -i-hw:-i+hw+1].copy()
+                        dataset_val_fft[:, :, -i-hw:-i+hw+1] = win2
+
+                    samples.append(dataset_val_fft[0, 0, :].copy())
 
                     # inverse fourier transform
                     data = torch.Tensor(ifft(dataset_val_fft))
@@ -808,6 +846,8 @@ class Experiment:
         path = os.path.join(self.args.result_dir,
                             'val_loss_PFIfreqs' + str(hw*2) + '.npy')
         np.save(path, np.array(perm_list))
+
+        np.save(path + '_samples', np.array(samples))
 
     def PFIch(self):
         '''
@@ -1264,6 +1304,8 @@ def main(Args):
                 e.model_inversion()
             if Args.func['multi2pair']:
                 e.multi2pair()
+            if Args.func['confusion_matrix']:
+                e.confusion_matrix()
 
             e.save_embeddings()
 

@@ -348,7 +348,26 @@ class linearSVM(LDA):
     '''
     def __init__(self, args):
         super(linearSVM, self).__init__(args)
-        self.model = LinearSVC(multi_class='crammer_singer', max_iter=2000)
+        self.model = LinearSVC()
+
+    def init_model(self):
+        self.model = LinearSVC()
+        self.fit_pca = False
+
+    def predict(self, x_val, window=None, x_t=None):
+        '''
+        Predict class labels.
+        '''
+        _, x_val, y_val = self.eval(x_val, window)
+
+        return self.model.decision_function(x_val), y_val
+
+
+class linearSVM_wavelet_freq(LDA_wavelet_freq, linearSVM):
+    '''
+    Linear SVM model using the functionalities of the LDA class.
+    '''
+    pass
 
 
 class SVM(LDA):
