@@ -229,8 +229,8 @@ class Experiment:
         loss, output, target = self.evaluate()
 
         # print variance if needed
-        if output is not None and target is not None:
-            print(torch.std((output-target).flatten()))
+        #if output is not None and target is not None:
+        #    print(torch.std((output-target).flatten()))
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
         with open(path, 'w') as f:
@@ -805,6 +805,8 @@ class Experiment:
         val_fft = fft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
         shuffled_val_fft = val_fft.copy()
 
+        og_loss = val_func(self.dataset.x_val_t, True)
+
         samples = [val_fft[0, 0, :].copy()]
 
         perm_list = []
@@ -816,7 +818,7 @@ class Experiment:
                 out = a[idx, np.arange(a.shape[1])].T
                 shuffled_val_fft[:, :, i] = out
 
-            loss_list = []
+            loss_list = [og_loss]
             # slide over epoch and always permute frequencies within a window
             for i in range(hw, times//2-hw):
                 if i > hw:
@@ -845,6 +847,83 @@ class Experiment:
         # save accuracies to file
         path = os.path.join(self.args.result_dir,
                             'val_loss_PFIfreqs' + str(hw*2) + '.npy')
+        np.save(path, np.array(perm_list))
+
+        np.save(path + '_samples', np.array(samples))
+
+    def PFIfreq_ch(self):
+        '''
+        Newer Permutation Feature Importance (PFI) function for timesteps.
+        Could also try the inverse, like a combination of PFI and window_eval.
+        '''
+        top_chs = self.args.closest_chs
+        hw = self.args.halfwin
+        chn = self.dataset.x_val_t.shape[1] - 1
+        times = self.dataset.x_val_t.shape[2]
+
+        # whether dealing with LDA or deep learning models
+        lda_or_not = isinstance(self.model, LDA)
+        val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+        if self.args.kernelPFI:
+            val_func = self.kernelPFI
+
+        # read a file containing closest channels to each channel location
+        path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
+        with open(path, 'rb') as f:
+            closest_k = pickle.load(f)
+
+        # evaluate without channel shuffling
+        og_loss = val_func(self.dataset.x_val_t, True)
+
+        # compute fft
+        val_fft = fft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
+        shuffled_val_fft = val_fft.copy()
+
+        samples = [val_fft[0, 0, :].copy()]
+
+        perm_list = []
+        for p in range(self.args.PFI_perms):
+            # shuffle frequency components across channels
+            idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
+            for i in range(times):
+                a = shuffled_val_fft[:, :, i].T
+                out = a[idx, np.arange(a.shape[1])].T
+                shuffled_val_fft[:, :, i] = out
+
+            windows = []
+            # slide over epoch and always permute frequencies within a window
+            for i in range(hw+1, times//2-hw):
+
+                loss_list = [og_loss]
+                for c in range(int(chn/3)):
+                    # need to select mag and 2 grads
+                    a = np.array(closest_k[c]) * 3
+                    chn_idx = np.append(np.append(a, a+1), a+2)
+
+                    dataset_val_fft = val_fft.copy()
+
+                    dataset_val_fft[:, chn_idx, i-hw:i+hw+1] = 0 + 0j
+                    if -i+hw+1 == 0:
+                        dataset_val_fft[:, chn_idx, -i-hw:] = 0 + 0j
+                    else:
+                        dataset_val_fft[:, chn_idx, -i-hw:-i+hw+1] = 0 + 0j
+
+                    samples.append(dataset_val_fft[0, 0, :].copy())
+
+                    # inverse fourier transform
+                    data = torch.Tensor(ifft(dataset_val_fft))
+                    self.dataset.x_val_t[:, :chn, :] = data
+
+                    loss = val_func(self.dataset.x_val_t)
+                    loss_list.append(loss)
+
+                windows.append(np.array(loss_list))
+
+            perm_list.append(np.array(windows))
+
+        # save accuracies to file
+        path = os.path.join(self.args.result_dir,
+                            'val_loss_PFIfreqs_ch' + str(hw*2) + '.npy')
         np.save(path, np.array(perm_list))
 
         np.save(path + '_samples', np.array(samples))
@@ -1253,58 +1332,60 @@ def main(Args):
             e = Experiment(args_new)
 
             # only run the functions specified in args
-            if Args.func['repeat_baseline']:
+            if Args.func.get('repeat_baseline'):
                 e.input_freq()
                 e.repeat_baseline()
-            if Args.func['AR_baseline']:
+            if Args.func.get('AR_baseline'):
                 e.AR_baseline()
-            if Args.func['LDA_baseline']:
+            if Args.func.get('LDA_baseline'):
                 e.lda_baseline()
-            if Args.func['LDA_pairwise']:
+            if Args.func.get('LDA_pairwise'):
                 e.lda_pairwise()
-            if Args.func['train']:
+            if Args.func.get('train'):
                 e.train()
-            if Args.func['analyse_kernels']:
+            if Args.func.get('analyse_kernels'):
                 e.analyse_kernels()
-            if Args.func['plot_kernels']:
+            if Args.func.get('plot_kernels'):
                 e.plot_kernels()
-            if Args.func['generate']:
+            if Args.func.get('generate'):
                 e.generate()
-            if Args.func['recursive']:
+            if Args.func.get('recursive'):
                 e.recursive()
-            if Args.func['kernel_network_FIR']:
+            if Args.func.get('kernel_network_FIR'):
                 e.kernel_network_FIR()
-            if Args.func['kernel_network_IIR']:
+            if Args.func.get('kernel_network_IIR'):
                 e.kernel_network_IIR()
-            if Args.func['feature_importance']:
+            if Args.func.get('feature_importance'):
                 e.feature_importance()
-            if Args.func['save_validation_subs']:
+            if Args.func.get('save_validation_subs'):
                 e.save_validation_subs()
-            if Args.func['save_validation_ch']:
+            if Args.func.get('save_validation_ch'):
                 e.save_validation_channels()
-            if Args.func['pca_sensor_loss']:
+            if Args.func.get('pca_sensor_loss'):
                 e.pca_sensor_loss()
-            if Args.func['compare_layers']:
+            if Args.func.get('compare_layers'):
                 e.compare_layers()
-            if Args.func['test']:
+            if Args.func.get('test'):
                 e.test()
-            if Args.func['LDA_eval']:
+            if Args.func.get('LDA_eval'):
                 e.lda_eval()
-            if Args.func['window_eval']:
+            if Args.func.get('window_eval'):
                 e.window_eval()
-            if Args.func['PFIts']:
+            if Args.func.get('PFIts'):
                 e.PFIts()
-            if Args.func['PFIch']:
+            if Args.func.get('PFIch'):
                 e.PFIch()
-            if Args.func['PFIemb']:
+            if Args.func.get('PFIemb'):
                 e.PFIemb()
-            if Args.func['PFIfreq']:
+            if Args.func.get('PFIfreq'):
                 e.PFIfreq()
-            if Args.func['model_inversion']:
+            if Args.func.get('PFIfreq_ch'):
+                e.PFIfreq_ch()
+            if Args.func.get('model_inversion'):
                 e.model_inversion()
-            if Args.func['multi2pair']:
+            if Args.func.get('multi2pair'):
                 e.multi2pair()
-            if Args.func['confusion_matrix']:
+            if Args.func.get('confusion_matrix'):
                 e.confusion_matrix()
 
             e.save_embeddings()

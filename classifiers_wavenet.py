@@ -3,6 +3,7 @@ import os
 import torch
 
 from torch.nn import Conv1d, Embedding
+from scipy.io import loadmat
 
 from wavenets_simple import WavenetSimple, WavenetSimpleSTS, ConvPoolNet
 from wavenets_simple import WavenetSimpleSembConcat, WavenetSimpleSembAdd
@@ -286,6 +287,12 @@ class WavenetClassifierSemb(WavenetClassifier):
         super(WavenetClassifierSemb, self).loaded(args)
         self.set_sub_dict()
 
+        # change embedding to an already trained one
+        if 'trained_semb' in args.result_dir:
+            path = os.path.join(args.load_model, '..', 'sub_emb.mat')
+            semb = torch.tensor(loadmat(path)['X']).cuda()
+            self.wavenet.subject_emb.weight = torch.nn.Parameter(semb)
+
     def build_model(self, args):
         self.wavenet = args.wavenet_class(args)
 
@@ -323,11 +330,33 @@ class WavenetClassifierSemb(WavenetClassifier):
         sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
         return sid
 
+    def get_sid_best(self, sid):
+        ind = 8
+        sid = torch.LongTensor([ind]).repeat(*list(sid.shape)).cuda()
+        return sid
+
+    def ensemble_forward(self, x, sid):
+        outputs = []
+        for i in range(15):
+            subid = torch.LongTensor([i]).repeat(*list(sid.shape)).cuda()
+            _, out_class = super(WavenetClassifierSemb, self).forward(x, subid)
+
+            outputs.append(out_class.detach())
+
+        outputs = torch.stack(outputs)
+        outputs = torch.mean(outputs, dim=0)
+
+        return None, outputs
+
     def forward(self, x, sid=None):
         if 'sub' in self.args.result_dir:
             sid = self.get_sid(sid)
         if 'exc' in self.args.result_dir:
             sid = self.get_sid_exc(sid)
+        if 'best' in self.args.result_dir:
+            sid = self.get_sid_best(sid)
+        if 'ensemble' in self.args.result_dir:
+            return self.ensemble_forward(x, sid)
 
         return super(WavenetClassifierSemb, self).forward(x, sid)
 

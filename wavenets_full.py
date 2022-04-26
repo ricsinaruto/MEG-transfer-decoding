@@ -10,6 +10,7 @@ class WavenetFull(WavenetSimple):
     '''
     def build_model(self, args):
         ch = args.ch_mult * args.num_channels
+        self.ch = ch
 
         self.filter = []
         self.gate = []
