@@ -25,7 +25,7 @@ from sklearn.metrics import confusion_matrix
 
 
 class Experiment:
-    def __init__(self, args):
+    def __init__(self, args, dataset=None):
         '''
         Initialize model and dataset using an Args object.
         '''
@@ -49,7 +49,9 @@ class Experiment:
         os.system('cp ' + args.name + ' ' + path)
 
         # initialize dataset
-        if args.load_dataset:
+        if dataset is not None:
+            self.dataset = dataset
+        elif args.load_dataset:
             self.dataset = args.dataset(args)
             print('Dataset initialized.', flush=True)
 
@@ -1262,6 +1264,7 @@ def main(Args):
     This should be called from launch.py, and it needs an Args object.
     '''
     args = Args()
+    dataset = None
 
     def checklist(x, i):
         # check if an argument is list or not
@@ -1270,6 +1273,7 @@ def main(Args):
     # if list of paths is given, then process everything individually
     for i, d_path in enumerate(args.data_path):
         args_pass = Args()
+
         args_pass.data_path = d_path
         args_pass.result_dir = checklist(args.result_dir, i)
         args_pass.dump_data = checklist(args.dump_data, i)
@@ -1300,6 +1304,10 @@ def main(Args):
         if isinstance(args.max_trials, list):
             num_loops = len(args.max_trials)
 
+        if args.common_dataset and dataset is None:
+            dataset = args_pass.dataset(args_pass)
+            args_data = deepcopy(args_pass)
+
         for n in range(num_loops):
             args_new = deepcopy(args_pass)
 
@@ -1329,7 +1337,12 @@ def main(Args):
                 name = 'train' + str(args_new.max_trials)
                 args_new.result_dir = os.path.join(args_pass.result_dir, name)
 
-            e = Experiment(args_new)
+            if args.common_dataset:
+                args_data.load_model = args.load_model[i]
+                args_data.result_dir = args.result_dir[i]
+                e = Experiment(args_data, dataset)
+            else:
+                e = Experiment(args_new)
 
             # only run the functions specified in args
             if Args.func.get('repeat_baseline'):

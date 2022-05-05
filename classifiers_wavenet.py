@@ -349,14 +349,15 @@ class WavenetClassifierSemb(WavenetClassifier):
         return None, outputs
 
     def forward(self, x, sid=None):
-        if 'sub' in self.args.result_dir:
-            sid = self.get_sid(sid)
-        if 'exc' in self.args.result_dir:
-            sid = self.get_sid_exc(sid)
-        if 'best' in self.args.result_dir:
-            sid = self.get_sid_best(sid)
-        if 'ensemble' in self.args.result_dir:
-            return self.ensemble_forward(x, sid)
+        if not self.args.keep_sid:
+            if 'sub' in self.args.result_dir:
+                sid = self.get_sid(sid)
+            if 'exc' in self.args.result_dir:
+                sid = self.get_sid_exc(sid)
+            if 'best' in self.args.result_dir:
+                sid = self.get_sid_best(sid)
+            if 'ensemble' in self.args.result_dir:
+                return self.ensemble_forward(x, sid)
 
         return super(WavenetClassifierSemb, self).forward(x, sid)
 

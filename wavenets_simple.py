@@ -265,6 +265,33 @@ class WavenetSimple(Module):
 
         return outputs
 
+    def run_kernel_multi(self, x, layer, num_kernel):
+        '''
+        Compute the output of a specific kernel num_kernel
+        in a specific layer (layer) to input x.
+        '''
+        # input and output filter indices
+        if self.args.kernel_inds:
+            out_filt = self.args.kernel_inds[num_kernel][0]
+            inp_filt = self.args.kernel_inds[num_kernel][1]
+        elif self.kernel_inds:
+            out_filt = self.kernel_inds[num_kernel][0]
+            inp_filt = self.kernel_inds[num_kernel][1]
+        else:
+            out_filt = random.randint(0, self.ch-1)
+            inp_filt = random.randint(0, self.ch-1)
+
+        # deconstruct convolution to get specific kernel output
+        x = F.conv1d(x[:, inp_filt:inp_filt + 1, :],
+                     layer.weight[
+                        out_filt:out_filt + 1, inp_filt:inp_filt + 1, :],
+                     layer.bias[out_filt:out_filt + 1],
+                     layer.stride,
+                     layer.padding,
+                     layer.dilation)
+
+        return x
+
     def analyse_kernels(self):
         '''
         Learn input for each kernel to see what patterns they are sensitive to.
@@ -467,33 +494,6 @@ class WavenetSimple(Module):
             # compute output of current layer
             data_f = self.activation(self.dropout(layer(data)))
             data = self.residual(data, data_f)
-
-    def run_kernel_multi(self, x, layer, num_kernel):
-        '''
-        Compute the output of a specific kernel num_kernel
-        in a specific layer (layer) to input x.
-        '''
-        # input and output filter indices
-        if self.args.kernel_inds:
-            out_filt = self.args.kernel_inds[num_kernel][0]
-            inp_filt = self.args.kernel_inds[num_kernel][1]
-        elif self.kernel_inds:
-            out_filt = self.kernel_inds[num_kernel][0]
-            inp_filt = self.kernel_inds[num_kernel][1]
-        else:
-            out_filt = random.randint(0, self.ch-1)
-            inp_filt = random.randint(0, self.ch-1)
-
-        # deconstruct convolution to get specific kernel output
-        x = F.conv1d(x[:, inp_filt:inp_filt + 1, :],
-                     layer.weight[
-                        out_filt:out_filt + 1, inp_filt:inp_filt + 1, :],
-                     layer.bias[out_filt:out_filt + 1],
-                     layer.stride,
-                     layer.padding,
-                     layer.dilation)
-
-        return x
 
     def kernel_FIR_plot(self, folder, data, i, layer, name='conv'):
         '''
@@ -1003,10 +1003,17 @@ class WavenetSimpleSembConcat(WavenetSimple):
         x = self.embed(x, sid)
         return super(WavenetSimpleSembConcat, self).forward4(x)
 
-    def layer_output(self, x, num_l, sid):
+    def layer_output(self, x, num_l, sid=None):
         '''
         Compute the output for a specific layer num_l.
         '''
+        if sid is None:
+            # repeat x 15 times
+            x = x.repeat(self.args.subjects, 1, 1)
+
+            # use all 15 embeddings
+            sid = torch.LongTensor(np.arange(self.args.subjects)).cuda()
+
         x = self.embed(x, sid)
         return super(WavenetSimpleSembConcat, self).layer_output(x, num_l)
 
