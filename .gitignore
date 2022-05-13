@@ -26,3 +26,11 @@ scripts/mrc_data.py
 scripts/wavenets_classifier.py
 scripts/wavenets_full.py
 scripts/wavenets_simple.py
+scripts/emb_matrix.txt
+scripts/excel_data.txt
+scripts/headpos.py
+scripts/headpos.ipynb
+scripts/plot.py
+scripts/plot.py
+scripts/plot.py
+scripts/classifiers_linear.py
