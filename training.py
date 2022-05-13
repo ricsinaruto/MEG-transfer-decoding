@@ -1,5 +1,4 @@
 import os
-import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import sails
@@ -10,18 +9,16 @@ from copy import deepcopy
 
 from scipy import signal
 from scipy.io import savemat
-from scipy.fft import fft, fftfreq, ifft
+from scipy.fft import fft, ifft
+
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
 
 from torch.nn import MSELoss
 from torch.optim import Adam
 
 from loss import Loss
 from classifiers_linear import LDA
-
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import confusion_matrix
 
 
 class Experiment:
@@ -167,12 +164,12 @@ class Experiment:
 
     def testing(self):
         '''
-        Evaluate model on the validation dataset.
+        Evaluate model on the test set.
         '''
         self.loss.dict = {}
         self.model.eval()
 
-        # loop over validation batches
+        # loop over test batches
         for i in range(self.dataset.test_batches):
             batch, sid = self.dataset.get_test_batch(i)
             loss, output, target = self.model.loss(batch, i, sid, train=False)
@@ -269,6 +266,9 @@ class Experiment:
                 f.write(str(sub_loss) + '\n')
 
     def confusion_matrix(self):
+        '''
+        Compute confusion matrix of model predictions and save to file.
+        '''
         _, outputs, targets = self.evaluate()
 
         outputs = outputs.detach().cpu().numpy()
@@ -638,6 +638,7 @@ class Experiment:
     def feature_importance(self):
         '''
         Evaluate how important is each timestep to prediction.
+        Only used for forecasting models, not classification.
         '''
         self.model.eval()
         rf = self.args.rf
@@ -699,19 +700,29 @@ class Experiment:
             f.write('\n'.join(loss_list))
 
     def evaluate_(self, data, og=None):
+        '''
+        Evaluation helper function for PFI.
+        '''
         losses, _, _ = self.evaluate()
         loss = [losses[k] for k in losses if 'Validation accuracy' in k]
         return loss[0]
 
     def LDA_eval_(self, data, og=None):
+        '''
+        Evaluation helper for PFI for linear models.
+        '''
         acc, _, _ = self.model.eval(data)
         return acc
 
     def kernelPFI(self, data, og=False):
+        '''
+        Helper function for PFI to compute kernel output deviations.
+        '''
         self.model.eval()
         ch = self.args.num_channels
         num_l = len(self.args.dilations)
 
+        # get output at specific kernels
         outputs_batch = []
         for i in range(self.dataset.val_batches):
             batch, sid = self.dataset.get_val_batch(i)
@@ -725,9 +736,11 @@ class Experiment:
             outputs.append(out)
 
         if og:
+            # set original kernel outputs
             self.kernelPFI_outputs = outputs
             ret = np.zeros(self.args.kernel_limit*num_l)
         else:
+            # compute kernel output deviation
             ret = []
             for og, new in zip(self.kernelPFI_outputs, outputs):
                 ret.append(torch.linalg.norm(og-new).numpy())
@@ -737,8 +750,7 @@ class Experiment:
 
     def PFIts(self):
         '''
-        Newer Permutation Feature Importance (PFI) function for timesteps.
-        Could also try the inverse, like a combination of PFI and window_eval.
+        Permutation Feature Importance (PFI) function for timesteps.
         '''
         hw = self.args.halfwin
         val_t = self.dataset.x_val_t.clone()
@@ -790,8 +802,7 @@ class Experiment:
 
     def PFIfreq(self):
         '''
-        Newer Permutation Feature Importance (PFI) function for timesteps.
-        Could also try the inverse, like a combination of PFI and window_eval.
+        Permutation Feature Importance (PFI) function for frequencies.
         '''
         hw = self.args.halfwin
         chn = self.dataset.x_val_t.shape[1] - 1
@@ -806,10 +817,10 @@ class Experiment:
         # compute fft
         val_fft = fft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
         shuffled_val_fft = val_fft.copy()
-
-        og_loss = val_func(self.dataset.x_val_t, True)
-
         samples = [val_fft[0, 0, :].copy()]
+
+        # original loss without shuffling
+        og_loss = val_func(self.dataset.x_val_t, True)
 
         perm_list = []
         for p in range(self.args.PFI_perms):
@@ -855,8 +866,8 @@ class Experiment:
 
     def PFIfreq_ch(self):
         '''
-        Newer Permutation Feature Importance (PFI) function for timesteps.
-        Could also try the inverse, like a combination of PFI and window_eval.
+        Permutation Feature Importance (PFI) function for frequencies.
+        spectral PFI is done separately for each channel.
         '''
         top_chs = self.args.closest_chs
         hw = self.args.halfwin
@@ -898,12 +909,13 @@ class Experiment:
 
                 loss_list = [og_loss]
                 for c in range(int(chn/3)):
-                    # need to select mag and 2 grads
+                    # need to select magnetometer and 2 gradiometers
                     a = np.array(closest_k[c]) * 3
                     chn_idx = np.append(np.append(a, a+1), a+2)
 
                     dataset_val_fft = val_fft.copy()
 
+                    # instead of shuffling just set to 0
                     dataset_val_fft[:, chn_idx, i-hw:i+hw+1] = 0 + 0j
                     if -i+hw+1 == 0:
                         dataset_val_fft[:, chn_idx, -i-hw:] = 0 + 0j
@@ -932,7 +944,7 @@ class Experiment:
 
     def PFIch(self):
         '''
-        Newer Permutation Feature Importance (PFI) function for channels.
+        Permutation Feature Importance (PFI) function for channels.
         '''
         top_chs = self.args.closest_chs
         val_t = self.dataset.x_val_t.clone()
@@ -964,6 +976,7 @@ class Experiment:
                 shuffled_val_t[:, i, :] = out
 
             windows = []
+            # loop over time windows for spatiotemporal PFI
             for t in self.args.pfich_timesteps:
                 tmin = t[0]
                 tmax = t[1]
@@ -972,7 +985,7 @@ class Experiment:
                 for i in range(int(chn/3)):
                     self.dataset.x_val_t = val_t.clone()
 
-                    # need to select mag and 2 grads
+                    # need to select magnetometer and 2 gradiometers
                     a = np.array(closest_k[i]) * 3
                     chn_idx = np.append(np.append(a, a+1), a+2)
 
@@ -1140,6 +1153,9 @@ class Experiment:
         return accs
 
     def model_inversion(self):
+        '''
+        Haufe model inversion method.
+        '''
         def diag_block_mat(L):
             shp = L[0].shape
             N = len(L)
@@ -1299,15 +1315,20 @@ def main(Args):
                 print('Skipping ' + d_path, flush=True)
                 continue
 
+        # separate loops for cross-validation (handled by args.split)
         num_loops = len(args.split) if isinstance(args.split, list) else 1
         split_len = num_loops
+
+        # separate loops for different training set ratios
         if isinstance(args.max_trials, list):
             num_loops = len(args.max_trials)
 
+        # if only using one dataset across loops, initialze it once
         if args.common_dataset and dataset is None:
             dataset = args_pass.dataset(args_pass)
             args_data = deepcopy(args_pass)
 
+        # inner loops, see above
         for n in range(num_loops):
             args_new = deepcopy(args_pass)
 
@@ -1315,11 +1336,13 @@ def main(Args):
             args_new.learning_rate = checklist(args_new.learning_rate, n)
             args_new.batch_size = checklist(args_new.batch_size, n)
 
+            # load learned dimensionality reduction for linear models
             if args_new.load_conv:
                 if 'model.pt' not in args_new.load_conv:
                     args_new.load_conv = os.path.join(
                         args_new.load_conv, 'cv' + str(n), 'model.pt')
 
+            # load cross-validation folds accordingly
             if split_len > 1:
                 args_new.split = checklist(args.split, n)
                 args_new.dump_data = os.path.join(
@@ -1333,10 +1356,12 @@ def main(Args):
                     args_new.load_model = os.path.join(
                         '/'.join(paths[:-1]), 'cv' + str(n), paths[-1])
 
+            # else use max_trials for looping logic
             elif isinstance(args.max_trials, list):
                 name = 'train' + str(args_new.max_trials)
                 args_new.result_dir = os.path.join(args_pass.result_dir, name)
 
+            # set common dataset if given
             if args.common_dataset:
                 args_data.load_model = args.load_model[i]
                 args_data.result_dir = args.result_dir[i]
