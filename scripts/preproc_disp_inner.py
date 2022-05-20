@@ -28,8 +28,8 @@ event_dict = {#'event_off':1,
              }
 
 
-dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_eeg_badchan/oslpy'
-outdir = '/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_eeg_badchan/inner_speech_sub'
+dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_eeg+meg_badchan/oslpy'
+outdir = '/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_eeg+meg_badchan/inner_speech_sub'
 files = files = [f for f in os.listdir(dataset_path) if 'raw.fif' in f]
 for f in files:
     raw = mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=True)
@@ -50,7 +50,7 @@ for f in files:
                         tmin=-0.1,
                         tmax=1.6,
                         baseline=(None, 0),
-                        picks=['eeg'],
+                        picks=['eeg', 'meg'],
                         reject=None,
                         preload=True)
 

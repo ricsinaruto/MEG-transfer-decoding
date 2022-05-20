@@ -2,7 +2,7 @@ import numpy as np
 import os
 import torch
 
-from torch.nn import Conv1d, Embedding
+from torch.nn import Conv1d, Embedding, CrossEntropyLoss
 from scipy.io import loadmat
 
 from wavenets_simple import WavenetSimple, WavenetSimpleSTS, ConvPoolNet
@@ -47,6 +47,32 @@ class WavenetClassifier(SimpleClassifier):
         x = self.classifier(x)
 
         return output, x
+
+
+class WavenetContClass(WavenetClassifier):
+    def __init__(self, args):
+        super(WavenetContClass, self).__init__(args)
+
+        # provide class weights to deal with unbalanced
+        weights = torch.ones(args.num_classes)
+        weights[-1] = self.args.epoch_ratio
+        self.criterion_class = CrossEntropyLoss(
+            weight=weights, label_smoothing=args.label_smoothing).cuda()
+
+    def loss(self, x, i=0, sid=None, train=True, criterion=None):
+        losses, out, targets = super(WavenetContClass, self).loss(
+            x, i, sid, train, criterion)
+
+        # look at epoch accuracy only
+        inds = targets < 118
+
+        acc = torch.eq(out[inds], targets[inds])
+        acc = torch.mean(acc.float())
+
+        losses['trainloss/Train accuracy epoch: '] = acc
+        losses['valloss/Validation accuracy epoch: '] = acc
+
+        return losses, out, targets
 
 
 class ConvPoolClassifier(WavenetClassifier):

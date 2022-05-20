@@ -7,7 +7,7 @@ from scipy.io import savemat
 
 
 dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/s3/maxfiltered"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_all_eeg_badchan"
+outdir = "/gpfs2/well/woolrich/projects/disp_csaky/s3/preproc40hz_eeg+meg_badchan"
 
 osl_outdir = os.path.join(outdir, 'oslpy')
 report_dir = os.path.join(osl_outdir, 'report')
@@ -30,6 +30,10 @@ preproc:
   - bad_channels:   {picks: 'grad'}
   - bad_channels:   {picks: 'eeg'}
   - bad_segments:   {segment_len: 800, picks: 'eeg'}
+  - bad_segments:   {segment_len: 800, picks: 'mag'}
+  - bad_segments:   {segment_len: 800, picks: 'grad'}
+  - ica_raw:        {picks: 'meg', n_components: 64}
+  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
   - ica_raw:        {picks: 'eeg', n_components: 32}
   - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
   - find_events:    {min_duration: 0.002}
@@ -63,7 +67,7 @@ for f in files:
                         tmin=-0.1,
                         tmax=1.6,
                         baseline=None,
-                        picks=['eeg'],
+                        picks=['eeg', 'meg'],
                         reject=None,
                         preload=True)
 

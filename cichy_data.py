@@ -302,17 +302,22 @@ class CichyContData(MRCData):
         '''
         Load raw data from multiple subjects.
         '''
-        if '.mat' in args.data_path:
-            paths = [args.data_path]
+        # whether we are working with one subject or a directory of them
+        if isinstance(args.data_path, list):
+            paths = args.data_path
         else:
             paths = os.listdir(args.data_path)
+            paths = [p for p in paths if 'sub' in p]
             paths = [os.path.join(args.data_path, p) for p in paths]
             paths = [p for p in paths if not os.path.isdir(p)]
-            paths = [p for p in paths if 'subject' in p.split('/')[-1]]
         print('Number of subjects: ', len(paths))
 
         resample = int(1000/args.sr_data)
         epoch_len = int(0.5*args.sr_data)
+
+        # split ratio
+        split = args.split[1] - args.split[0]
+        split_trials = int(30 * split)
 
         x_trains = []
         x_vals = []
@@ -321,29 +326,32 @@ class CichyContData(MRCData):
             print(path)
 
             # will have to be changed to handle concatenated subjects
+            # load event timings for continuous data
             ev_path = os.path.join(args.data_path, 'event_times.npy')
-            event_times = [(int(ev[0]/resample), ev[2]) for ev in np.load(ev_path)]
+            event_times = np.load(ev_path)
+            event_times = [(int(ev[0]/resample), ev[2]) for ev in event_times]
 
-            x_train = np.load(path).T
-            d = np.array([0])
-
-            for i, val in enumerate(d[1:]):
-                d[i+1] = d[i] + val
-            disconts.append(list((d/resample).astype(int)))
+            dataset = np.load(path).T
 
             # choose first 306 channels and downsample
-            x_train = x_train[args.num_channels, ::resample]
-            labels = [0] * x_train.shape[1]
+            dataset = dataset[args.num_channels, ::resample]
+            labels = [118] * dataset.shape[1]
 
             val_counter = [0] * args.num_classes
             val_events = []
+            test_events = []
             train_events = []
+            '''
+                    elif val_counter[ev[1]-1] < split_trials * 2:
+                        val_counter[ev[1]-1] += 1
+                        test_events.append(ev[0])
+            '''
             # set labels
             for ev in event_times:
                 if ev[1] < 119:
-                    labels[ev[0]:ev[0]+epoch_len] = [ev[1]] * epoch_len
+                    labels[ev[0]:ev[0]+epoch_len] = [ev[1]-1] * epoch_len
 
-                    if val_counter[ev[1]-1] < 4:
+                    if val_counter[ev[1]-1] < 6:
                         val_counter[ev[1]-1] += 1
                         val_events.append(ev[0])
                     else:
@@ -351,16 +359,21 @@ class CichyContData(MRCData):
 
             labels = np.array(labels)
 
+            print('Last val sample: ', max(val_events))
+            print('First train sample: ', min(train_events))
+
             split = int((max(val_events) + min(train_events))/2)
             labels = {'val': labels[:split].reshape(1, -1),
                       'train': labels[split:].reshape(1, -1)}
 
             # create training and validation splits
-            x_val = x_train[:, :split]
-            x_train = x_train[:, split:]
+            x_val = dataset[:, :split]
+            x_test = dataset[:, :split]
+            x_train = dataset[:, split:]
 
-            x_train, mean, var = self.normalize(x_train)
-            x_val, _, _ = self.normalize(x_val, mean, var)
+            x_train, x_val, x_test = self.normalize(x_train.T,
+                                                    x_val.T,
+                                                    x_test.T)
 
             # add labels to data
             x_val = np.concatenate((x_val, labels['val']), axis=0)
@@ -369,8 +382,9 @@ class CichyContData(MRCData):
             x_trains.append(x_train)
             x_vals.append(x_val)
 
-        args.num_channels = len(args.num_channels)
-        return x_trains, x_vals, disconts
+        # this is just needed to work together with other dataset classes
+        disconts = [[0] for path in paths]
+        return x_trains, x_vals, x_vals, disconts
 
     def create_examples(self, x, disconts):
         '''
@@ -378,25 +392,106 @@ class CichyContData(MRCData):
         '''
         return x.reshape(1, x.shape[0], x.shape[1])
 
-    def set_common(self):
+    def set_common(self, args=None):
         # set common parameters
         super(CichyContData, self).set_common()
 
-        self.train_batches = int((self.x_train_t.shape[1] - self.args.rf - 1) / self.bs['train'])
-        self.val_batches = int((self.x_val_t.shape[1] - self.args.rf - 1) / self.bs['val'])
+        sr = self.args.sample_rate
+        bs = self.args.batch_size
+        self.bs = {'train': bs, 'val': bs, 'test': bs}
+
+        print('Train batch size: ', self.bs['train'])
+        print('Validation batch size: ', self.bs['val'])
+
+        self.train_batches = int(
+            (self.x_train_t.shape[2] - sr - 1) / self.bs['train'])
+        self.val_batches = int(
+            (self.x_val_t.shape[2] - sr - 1) / self.bs['val'])
+
+        args.num_channels -= 1
 
     def get_batch(self, i, data, split):
-        rf = self.args.rf
+        sr = self.args.sample_rate
         if i == 0:
-            self.inds[split] = list(range(data.shape[1] - rf))
+            self.inds[split] = np.arange(data.shape[2] - sr)
+            np.random.shuffle(self.inds[split])
 
         # sample random indices
-        inds = random.sample(self.inds[split], self.bs[split])
-        self.inds[split] = [v for v in self.inds[split] if v not in inds]
+        inds = self.inds[split][:self.bs[split]]
+        data = torch.stack([data[0, :, ind:ind+sr] for ind in inds])
 
-        data = torch.stack([data[0, :, ind:ind+rf] for ind in inds])
-
+        self.inds[split] = self.inds[split][self.bs[split]:]
         return data, self.sub_id[split]
+
+    def create_labels(self, data):
+        sr = self.args.sample_rate[1] - self.args.sample_rate[0]
+        inds = list(range(data.shape[2] - sr))
+        peak_times = [-1] * data.shape[2]
+
+        # how many timesteps needed to detect image
+        tresh = int(self.args.sr_data * self.args.decode_peak)
+        back_tresh = int(0.5*self.args.sr_data) - tresh
+
+        # loop over examples in batch
+        for i in inds:
+            targets = data[0, -1, i:i+sr].copy()
+
+            # if last timestep is one of the 118 images and enough time
+            # has elapsed since image presentation
+            if targets[-1] < 118 and targets[-tresh] == targets[-1]:
+                data[0, -1, i] = targets[-1]
+
+                # set image start
+                tinds = np.nonzero(targets == targets[-1])[0]
+                peak_times[i] = tinds[0] + tresh
+                if tinds[0] < int(0.5*self.args.sr_data) - 1:
+                    print('Error: Fix peak times')
+
+            # else predict last image presented
+            else:
+                unique, counts = np.unique(targets, return_counts=True)
+                counts = counts[unique != 118]
+                unique = unique[unique != 118]
+
+                c = counts[np.argsort(counts)[-1]] if len(counts) else 0
+                if c > back_tresh:
+                    max_ind = np.argsort(counts)[-1]
+                    data[0, -1, i] = unique[max_ind]
+
+                    if counts[max_ind] > int(0.5*self.args.sr_data):
+                        print('Error: multiple of the same images')
+
+                    # set image start
+                    tinds = np.nonzero(targets == unique[max_ind])[0]
+                    peak_times[i] = tinds[-1] - back_tresh
+                else:
+                    data[0, -1, i] = 118
+
+        # scale non-epoch class
+        nonepoch_trials = sum(data[0, -1, :] == 118)
+        epoch_trials = sum(data[0, -1, :] == 0)
+        self.args.epoch_ratio = epoch_trials / nonepoch_trials
+
+        print('Non-epoch trials: ', sum(data[0, -1, :] == 118))
+        print('Class 0  trials: ', sum(data[0, -1, :] == 0))
+        print('Class 1  trials: ', sum(data[0, -1, :] == 1))
+        print('Total trials: ', data.shape[2])
+
+        peak_times = np.array(peak_times).reshape(1, 1, -1)
+        return peak_times
+
+    def load_mat_data(self, args):
+        super(CichyContData, self).load_mat_data(args)
+
+        ev_times = self.create_labels(self.x_train_t)
+        self.x_train_t = np.concatenate(
+            (self.x_train_t[:, :-1, :], ev_times, self.x_train_t[:, -1:, :]),
+            axis=1)
+
+        ev_times = self.create_labels(self.x_val_t)
+        self.x_val_t = np.concatenate(
+            (self.x_val_t[:, :-1, :], ev_times, self.x_val_t[:, -1:, :]),
+            axis=1)
 
 
 class CichyDataCPU(CichyData):
