@@ -57,22 +57,97 @@ class WavenetContClass(WavenetClassifier):
         weights = torch.ones(args.num_classes)
         weights[-1] = self.args.epoch_ratio
         self.criterion_class = CrossEntropyLoss(
-            weight=weights, label_smoothing=args.label_smoothing).cuda()
+            weight=weights,
+            label_smoothing=args.label_smoothing).cuda()
 
     def loss(self, x, i=0, sid=None, train=True, criterion=None):
-        losses, out, targets = super(WavenetContClass, self).loss(
-            x, i, sid, train, criterion)
+        inputs = x[:, :self.args.num_channels, :]
+        targets = x[:, -1, 0].long()
+        out_pred, out_class = self.forward(inputs, sid)
+
+        # compute loss
+        loss = self.criterion_class(out_class, targets)
+
+        # compute accuracy
+        acc_raw = accuracy(out_class, targets).float()
+        acc = torch.mean(acc_raw)
 
         # look at epoch accuracy only
         inds = targets < 118
+        acc_ep = accuracy(out_class[inds], targets[inds])
+        acc_ep = torch.mean(acc_ep.float())
 
-        acc = torch.eq(out[inds], targets[inds])
+        # look at accuracy where full epoch is visible to model
+        tresh = int(self.args.sr_data * self.args.decode_peak)
+        peak_times = x[:, -2, 0].long()
+        inds = (tresh + 1 < peak_times) & (peak_times < tresh + 25) & inds
+
+        acc_full = accuracy(out_class[inds], targets[inds])
+        acc_full = torch.mean(acc_full.float())
+
+        # assemble dictionary of losses
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'trainloss/Train accuracy: ': acc,
+                  'valloss/Validation loss: ': loss,
+                  'valloss/valcriterion/Validation accuracy: ': acc,
+                  'valloss/saveloss/none': 1-acc,
+                  'trainloss/Train accuracy epoch: ': acc_ep,
+                  'valloss/Validation accuracy epoch: ': acc_ep,
+                  'trainloss/Train accuracy full-epoch: ': acc_full,
+                  'valloss/Validation accuracy full-epoch: ': acc_full}
+
+        return losses, (out_class, out_pred), acc_raw
+
+
+class WavenetContPeakClass(WavenetContClass):
+    def __init__(self, args):
+        super(WavenetContPeakClass, self).__init__(args)
+        self.criterion_peak = CrossEntropyLoss(
+            label_smoothing=args.label_smoothing).cuda()
+
+    def loss(self, x, i=0, sid=None, train=True, crit=None):
+        losses, out, acc_raw = super(WavenetContPeakClass, self).loss(
+            x, i, sid, train, crit)
+        out = out[1]
+
+        # targets for peak classification
+        targets = x[:, -2, 0].long()
+        inds = targets != -1
+        loss = self.criterion_peak(out[inds], targets[inds])
+
+        # add the 2 losses together
+        losses['trainloss/optloss/Training loss: '] += loss
+        losses['valloss/Validation loss: '] += loss
+
+        # accuracy for peak classification
+        acc = accuracy(out[inds], targets[inds])
         acc = torch.mean(acc.float())
 
-        losses['trainloss/Train accuracy epoch: '] = acc
-        losses['valloss/Validation accuracy epoch: '] = acc
+        losses['trainloss/Train accuracy peak: '] = acc
+        losses['valloss/Validation accuracy peak: '] = acc
 
-        return losses, out, targets
+        return losses, out, acc_raw
+
+    def build_model(self, args):
+        super(WavenetContPeakClass, self).build_model(args)
+
+        num_classes = args.num_classes
+        args.num_classes = args.sample_rate
+        self.peak_classifier = ClassifierModule(args, self.class_dim)
+        args.num_classes = num_classes
+
+    def forward(self, x, sid=None):
+        '''
+        Run wavenet on input then feed the output into the classifier.
+        '''
+        _, x = self.wavenet(x, sid)
+        x = x[:, :, ::self.args.rf].reshape(x.shape[0], -1)
+        xc = self.classifier(x)
+
+        # peak classification
+        xp = self.peak_classifier(x)
+
+        return xp, xc
 
 
 class ConvPoolClassifier(WavenetClassifier):

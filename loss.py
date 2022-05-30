@@ -8,10 +8,13 @@ class Loss:
 
     def append(self, x):
         for key in x:
+            x[key] = x[key].item()
             if self.dict.get(key, 'no') == 'no':
-                self.dict[key] = [x[key].item()]
+                self.dict[key] = [x[key]]
             else:
-                self.dict[key].append(x[key].item())
+                self.dict[key].append(x[key])
+
+        return x
 
     def print(self, split, exception='saveloss'):
         msg = ''

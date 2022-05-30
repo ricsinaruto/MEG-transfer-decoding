@@ -3,6 +3,7 @@ import sys
 import torch
 import random
 import pickle
+import mne
 import numpy as np
 
 from scipy.io import loadmat, savemat
@@ -234,6 +235,27 @@ class CichyData(MRCData):
         args.num_channels = len(args.num_channels)
         return x_trains, x_vals, x_tests, disconts
 
+    def normalize_ex(self, data):
+        '''
+        data = data.transpose(0, 1, 3, 2)
+        scaler = StandardScaler()
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                data[i, j, :, :] = scaler.fit_transform(data[i, j, :, :])
+
+        return data.transpose(0, 1, 3, 2)
+        '''
+
+        trials = data.shape[1]
+        data = data.reshape(-1, data.shape[2], data.shape[3])
+        data = data.astype(np.float64)
+        data = mne.filter.notch_filter(
+            data, 1000, np.array([50, 100, 150]), phase='minimum')
+        data = mne.filter.filter_data(
+            data, 1000, 0.1, 124.9, phase='minimum')
+
+        return data.reshape(-1, trials, data.shape[1], data.shape[2])
+
     def create_examples(self, x, disconts):
         '''
         Create examples with labels.
@@ -429,8 +451,10 @@ class CichyContData(MRCData):
         peak_times = [-1] * data.shape[2]
 
         # how many timesteps needed to detect image
-        tresh = int(self.args.sr_data * self.args.decode_peak)
-        back_tresh = int(0.5*self.args.sr_data) - tresh
+        im_len = int(0.5*self.args.sr_data)
+        tresh = int(self.args.decode_front*self.args.sr_data)
+        back_tresh = int(self.args.decode_back*self.args.sr_data)
+        peak = int(self.args.decode_peak*self.args.sr_data)
 
         # loop over examples in batch
         for i in inds:
@@ -441,31 +465,48 @@ class CichyContData(MRCData):
             if targets[-1] < 118 and targets[-tresh] == targets[-1]:
                 data[0, -1, i] = targets[-1]
 
-                # set image start
-                tinds = np.nonzero(targets == targets[-1])[0]
-                peak_times[i] = tinds[0] + tresh
-                if tinds[0] < int(0.5*self.args.sr_data) - 1:
-                    print('Error: Fix peak times')
+                # set image peak time (150ms)
+                tinds = np.nonzero(targets - targets[-1])[0]
+                peak_times[i] = tinds[-1] + peak
+                if tinds[-1] < sr - im_len + 1 or peak_times[i] > sr-1:
+                    print('Error1')
+                    print(targets)
 
             # else predict last image presented
+            elif (targets[0] < 118 and
+                    np.all(targets[:back_tresh] == targets[0])):
+                data[0, -1, i] = targets[0]
+
+                # set image peak time (150ms)
+                tinds = np.nonzero(targets - targets[0])[0]
+                peak_times[i] = tinds[0] - im_len + peak
+                if tinds[0] > im_len + 1 or peak_times[i] < 0:
+                    print('Error2')
+                    print(peak_times[i])
+                    print(targets)
+
+            # else predict image in middle of window
+            elif targets[im_len-1] < 118 or targets[-im_len+1] < 118:
+                data[0, -1, i] = targets[-im_len+1]
+                if targets[im_len-1] < 118:
+                    data[0, -1, i] = targets[im_len-1]
+
+                # set image start
+                tinds = np.nonzero(targets - 118)[0]
+                tinds2 = np.nonzero(targets - targets[0])[0]
+                image_start = tinds[tinds > tinds2[0]][0]
+                peak_times[i] = image_start + peak
+                if image_start < 0 or image_start + im_len > sr:
+                    print('Error3')
+                    print(targets)
             else:
-                unique, counts = np.unique(targets, return_counts=True)
-                counts = counts[unique != 118]
-                unique = unique[unique != 118]
+                data[0, -1, i] = 118
 
-                c = counts[np.argsort(counts)[-1]] if len(counts) else 0
-                if c > back_tresh:
-                    max_ind = np.argsort(counts)[-1]
-                    data[0, -1, i] = unique[max_ind]
+            if peak_times[i] < -1 or peak_times[i] > sr - 1:
+                print(targets)
 
-                    if counts[max_ind] > int(0.5*self.args.sr_data):
-                        print('Error: multiple of the same images')
-
-                    # set image start
-                    tinds = np.nonzero(targets == unique[max_ind])[0]
-                    peak_times[i] = tinds[-1] - back_tresh
-                else:
-                    data[0, -1, i] = 118
+            #print(data[0, -1, i])
+            #print(targets)
 
         # scale non-epoch class
         nonepoch_trials = sum(data[0, -1, :] == 118)
@@ -492,6 +533,8 @@ class CichyContData(MRCData):
         self.x_val_t = np.concatenate(
             (self.x_val_t[:, :-1, :], ev_times, self.x_val_t[:, -1:, :]),
             axis=1)
+
+        self.x_test_t = self.x_val_t
 
 
 class CichyDataCPU(CichyData):

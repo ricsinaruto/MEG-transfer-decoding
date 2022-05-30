@@ -128,7 +128,7 @@ class Experiment:
                 losses[optkey[0]].backward()
                 optimizer.step()
                 optimizer.zero_grad()
-                self.loss.append(losses)
+                losses = self.loss.append(losses)
 
             # print training losses
             if not epoch % self.args.print_freq:
@@ -215,11 +215,12 @@ class Experiment:
             loss, output, target = self.model.loss(batch, i, sid, train=False)
             self.loss.append(loss)
 
-            outputs.append(output)
-            targets.append(target)
+            #outputs.append(output)
+            #targets.append(target)
 
         losses = self.loss.print('valloss')
-        return losses, torch.cat(outputs), torch.cat(targets)
+        #return losses, torch.cat(outputs), torch.cat(targets)
+        return losses, None, None
 
     def save_validation(self):
         '''
@@ -264,6 +265,29 @@ class Experiment:
             for i in range(self.args.subjects):
                 sub_loss = torch.mean(loss[sid == i]).item()
                 f.write(str(sub_loss) + '\n')
+
+    def save_validation_timepoints(self):
+        '''
+        Print validation losses separately on each subject's dataset.
+        '''
+        self.model.eval()
+        accs = []
+
+        # loop over validation batches
+        for i in range(self.dataset.val_batches):
+            batch, sid = self.dataset.get_val_batch(i)
+            _, _, acc = self.model.loss(batch, i, sid, train=False)
+
+            accs.append((batch[:, -2, 0], acc.detach()))
+
+        sid = torch.cat(tuple([loss[0] for loss in accs]))
+        loss = torch.cat(tuple([loss[1] for loss in accs]))
+
+        path = os.path.join(self.args.result_dir, 'val_loss_timepoints.txt')
+        with open(path, 'w') as f:
+            for i in range(self.args.sample_rate):
+                time_loss = torch.mean(loss[sid == i]).item()
+                f.write(str(time_loss) + '\n')
 
     def confusion_matrix(self):
         '''
@@ -1425,6 +1449,8 @@ def main(Args):
                 e.multi2pair()
             if Args.func.get('confusion_matrix'):
                 e.confusion_matrix()
+            if Args.func.get('save_validation_timepoints'):
+                e.save_validation_timepoints()
 
             e.save_embeddings()
 
