@@ -1,4 +1,3 @@
-# Original ignores from parent project
 launch_q.py
 launch_q2.py
 args_q.py
@@ -13,6 +12,8 @@ scripts/preCompiled_edfmex
 data/*
 results/*
 tmp/*
+.ipynb_checkpoints
+.DS_Store
 *.pyc
 *.asv
 *.mat
@@ -33,11 +34,3 @@ scripts/plot.py
 scripts/plot.py
 scripts/plot.py
 scripts/classifiers_linear.py
-
-# OSX / intellij
-/.idea
-.DS_Store
-
-# Python compile folders
-.ipynb_checkpoints
-/__pycache__
