@@ -226,12 +226,12 @@ class DondersData:
         self.test_batches = int(self.x_test_t.shape[0] / self.bs['test'])
 
         try:
-            self.x_train_t = torch.Tensor(self.x_train_t).float().cuda()
-            self.x_val_t = torch.Tensor(self.x_val_t).float().cuda()
-            self.x_test_t = torch.Tensor(self.x_test_t).float().cuda()
-            self.sub_id['train'] = torch.LongTensor(self.sub_id['train']).cuda()
-            self.sub_id['val'] = torch.LongTensor(self.sub_id['val']).cuda()
-            self.sub_id['test'] = torch.LongTensor(self.sub_id['test']).cuda()
+            self.x_train_t = torch.Tensor(self.x_train_t).float()
+            self.x_val_t = torch.Tensor(self.x_val_t).float()
+            self.x_test_t = torch.Tensor(self.x_test_t).float()
+            self.sub_id['train'] = torch.LongTensor(self.sub_id['train'])
+            self.sub_id['val'] = torch.LongTensor(self.sub_id['val'])
+            self.sub_id['test'] = torch.LongTensor(self.sub_id['test'])
             print('Data loaded on gpu.')
         except Exception:
             traceback.print_exc()

@@ -386,6 +386,7 @@ class Experiment:
         accs = []
 
         for i in range(hw, times-hw):
+
             # select input slice
             x_t = self.dataset.x_train_t.clone()
             x_v = self.dataset.x_val_t.clone()
@@ -1400,6 +1401,7 @@ def main(Args):
             if Args.func.get('AR_baseline'):
                 e.AR_baseline()
             if Args.func.get('LDA_baseline'):
+                print('Running LDA.')
                 e.lda_baseline()
             if Args.func.get('LDA_pairwise'):
                 e.lda_pairwise()
