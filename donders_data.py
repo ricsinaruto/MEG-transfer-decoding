@@ -220,6 +220,7 @@ class DondersData:
 
         print('Train batch size: ', self.bs['train'])
         print('Validation batch size: ', self.bs['val'])
+        print('Test batch size: ', self.bs['test'])
 
         self.train_batches = int(self.x_train_t.shape[0] / self.bs['train'])
         self.val_batches = int(self.x_val_t.shape[0] / self.bs['val'])

@@ -4,9 +4,12 @@ import torch
 import random
 import pickle
 import mne
+import traceback
 import numpy as np
 
 from scipy.io import loadmat, savemat
+from sklearn.preprocessing import StandardScaler, RobustScaler, MaxAbsScaler
+from sklearn.decomposition import PCA
 
 from mrc_data import MRCData
 
@@ -315,6 +318,12 @@ class CichyDataCrossval(CichyData):
         return x_train, x_val, x_test
 
 
+class CichyDataCrossvalNoNorm(CichyDataCrossval):
+    def normalize(self, x_train, x_val, x_test):
+        self.norm = StandardScaler()
+        return x_train.T, x_val.T, x_test.T
+
+
 class CichyContData(MRCData):
     '''
     Implements the continuous classification problem on the Cichy dataset.
@@ -429,6 +438,8 @@ class CichyContData(MRCData):
             (self.x_train_t.shape[2] - sr - 1) / self.bs['train'])
         self.val_batches = int(
             (self.x_val_t.shape[2] - sr - 1) / self.bs['val'])
+        self.test_batches = int(
+            (self.x_test_t.shape[2] - sr - 1) / self.bs['test'])
 
         args.num_channels -= 1
 
@@ -453,8 +464,12 @@ class CichyContData(MRCData):
         # how many timesteps needed to detect image
         im_len = int(0.5*self.args.sr_data)
         tresh = int(self.args.decode_front*self.args.sr_data)
+        halftresh = int(self.args.decode_front*self.args.sr_data/2)
         back_tresh = int(self.args.decode_back*self.args.sr_data)
         peak = int(self.args.decode_peak*self.args.sr_data)
+
+        im_presence = data[0, -1, :].copy()
+        im_presence = (im_presence < 118).astype(int)
 
         # loop over examples in batch
         for i in inds:
@@ -462,13 +477,13 @@ class CichyContData(MRCData):
 
             # if last timestep is one of the 118 images and enough time
             # has elapsed since image presentation
-            if targets[-1] < 118 and targets[-tresh] == targets[-1]:
+            if targets[-1] < 118 and np.all(targets[-tresh:] == targets[-1]):
                 data[0, -1, i] = targets[-1]
 
                 # set image peak time (150ms)
                 tinds = np.nonzero(targets - targets[-1])[0]
                 peak_times[i] = tinds[-1] + peak
-                if tinds[-1] < sr - im_len + 1 or peak_times[i] > sr-1:
+                if tinds[-1] < sr - im_len - 1 or peak_times[i] > sr-1:
                     print('Error1')
                     print(targets)
 
@@ -479,7 +494,7 @@ class CichyContData(MRCData):
 
                 # set image peak time (150ms)
                 tinds = np.nonzero(targets - targets[0])[0]
-                peak_times[i] = tinds[0] - im_len + peak
+                peak_times[i] = tinds[0] - im_len + peak + 1
                 if tinds[0] > im_len + 1 or peak_times[i] < 0:
                     print('Error2')
                     print(peak_times[i])
@@ -519,22 +534,393 @@ class CichyContData(MRCData):
         print('Total trials: ', data.shape[2])
 
         peak_times = np.array(peak_times).reshape(1, 1, -1)
-        return peak_times
+        im_presence = np.array(im_presence).reshape(1, 1, -1)
+        return peak_times, im_presence
 
     def load_mat_data(self, args):
         super(CichyContData, self).load_mat_data(args)
 
-        ev_times = self.create_labels(self.x_train_t)
-        self.x_train_t = np.concatenate(
-            (self.x_train_t[:, :-1, :], ev_times, self.x_train_t[:, -1:, :]),
-            axis=1)
+        ev_times, im_presence = self.create_labels(self.x_train_t)
+        self.x_train_t = np.concatenate((self.x_train_t[:, :-1, :],
+                                         im_presence,
+                                         ev_times,
+                                         self.x_train_t[:, -1:, :]),
+                                        axis=1)
 
-        ev_times = self.create_labels(self.x_val_t)
-        self.x_val_t = np.concatenate(
-            (self.x_val_t[:, :-1, :], ev_times, self.x_val_t[:, -1:, :]),
-            axis=1)
+        ev_times, im_presence = self.create_labels(self.x_val_t)
+        self.x_val_t = np.concatenate((self.x_val_t[:, :-1, :],
+                                       im_presence,
+                                       ev_times,
+                                       self.x_val_t[:, -1:, :]),
+                                      axis=1)
 
         self.x_test_t = self.x_val_t
+
+
+class CichySimpleContData(CichyContData):
+    def create_labels(self, data):
+        sr = self.args.sample_rate[1] - self.args.sample_rate[0]
+        inds = list(range(data.shape[2] - sr))
+        peak_times = [-1] * data.shape[2]
+
+        im_presence = data[0, -1, :].copy()
+        im_presence = (im_presence < 118).astype(int)
+        im_presence = np.array(im_presence).reshape(1, 1, -1)
+
+        # how many timesteps needed to detect image
+        peak = int(self.args.decode_peak*self.args.sr_data)
+
+        # loop over examples in batch
+        for i in inds:
+            targets = data[0, -1, i:i+sr].copy()
+
+            end_loop = False
+            starts = list(range(20, 40))
+            for ind in starts:
+                if targets[ind] < 118 and np.all(targets[ind:ind+125] == targets[ind]):
+                    data[0, -1, i] = targets[ind]
+                    peak_times[i] = ind + peak
+                    end_loop = True
+
+                if end_loop:
+                    break
+
+            if not end_loop:
+                data[0, -1, i] = 118
+
+        # scale non-epoch class
+        nonepoch_trials = sum(data[0, -1, :] == 118)
+        epoch_trials = sum(data[0, -1, :] == 0)
+        self.args.epoch_ratio = epoch_trials / nonepoch_trials
+
+        print('Non-epoch trials: ', sum(data[0, -1, :] == 118))
+        print('Class 0  trials: ', sum(data[0, -1, :] == 0))
+        print('Class 1  trials: ', sum(data[0, -1, :] == 1))
+        print('Total trials: ', data.shape[2])
+
+        peak_times = np.array(peak_times).reshape(1, 1, -1)
+        return peak_times, im_presence
+
+
+class CichyQuantized(MRCData):
+    def __init__(self, args):
+        '''
+        Load data and apply pca, then create batches.
+        '''
+        self.args = args
+        self.inds = {'train': [], 'val': [], 'test': []}
+        self.sub_id = {'train': [0], 'val': [0], 'test': [0]}
+        self.chn_weights_sample = {}
+        self.chn_ids = {}
+
+        # load pickled data directly, no further processing required
+        if args.load_data:
+            self.load_mat_data(args)
+            self.set_common(args)
+            return
+
+        # load the raw subject data
+        x_trains, x_vals, x_tests = self.load_data(args)
+
+        # this is the continuous data for AR models
+        x_trains = np.concatenate(tuple(x_trains), axis=1)
+        x_vals = np.concatenate(tuple(x_vals), axis=1)
+        x_tests = np.concatenate(tuple(x_tests), axis=1)
+
+        xtn, xv, xtt = self.encode(x_trains[:-2], x_vals[:-2], x_tests[:-2])
+
+        # append back labels and sid
+        self.x_train_t = np.append(xtn, x_trains[-2:, :-1], axis=0)
+        self.x_val_t = np.append(xv, x_vals[-2:, :-1], axis=0)
+        self.x_test_t = np.append(xtt, x_tests[-2:, :-1], axis=0)
+
+        if not os.path.isdir(os.path.split(args.dump_data)[0]):
+            os.mkdir(os.path.split(args.dump_data)[0])
+
+        self.save_data()
+        self.set_common(args)
+
+    def load_data(self, args):
+        '''
+        Load raw data from multiple subjects.
+        '''
+        # whether we are working with one subject or a directory of them
+        if isinstance(args.data_path, list):
+            paths = args.data_path
+        else:
+            paths = os.listdir(args.data_path)
+            paths = [p for p in paths if 'sub' in p]
+            paths = [os.path.join(args.data_path, p) for p in paths]
+            paths = [p for p in paths if not os.path.isdir(p)]
+        print('Number of subjects: ', len(paths))
+
+        resample = int(1000/args.sr_data)
+        epoch_len = int(0.5*args.sr_data)
+
+        x_trains = []
+        x_vals = []
+        x_tests = []
+        for sid, path in enumerate(paths):
+            print(path)
+
+            # will have to be changed to handle concatenated subjects
+            # load event timings for continuous data
+            ev_path = os.path.join(args.data_path, 'event_times.npy')
+            event_times = np.load(ev_path)
+            event_times = [(int(ev[0]/resample), ev[2]) for ev in event_times]
+
+            dataset = np.load(path).T
+
+            # choose first 306 channels and downsample
+            dataset = dataset[args.num_channels, ::resample]
+            labels = [0] * dataset.shape[1]
+
+            val_counter = [0] * args.num_classes
+            test_counter = [0] * args.num_classes
+            val_events = []
+            test_events = []
+            train_events = []
+
+            # set labels
+            for ev in event_times:
+                if ev[1] < 119:
+                    cond = ev[1]-1
+                    labels[ev[0]:ev[0]+epoch_len] = [cond+1] * epoch_len
+
+                    if val_counter[cond] < 4:
+                        val_counter[cond] += 1
+                        val_events.append(ev[0])
+                    elif test_counter[cond] < 4:
+                        test_counter[cond] += 1
+                        test_events.append(ev[0])
+                    else:
+                        train_events.append(ev[0])
+
+            labels = np.array(labels)
+
+            print('Last val sample: ', max(val_events))
+            print('First test sample: ', min(test_events))
+            print('Last test sample: ', max(test_events))
+            print('First train sample: ', min(train_events))
+
+            split_v = int((max(val_events) + min(test_events))/2)
+            split_t = int((max(test_events) + min(train_events))/2)
+            labels = {'val': labels[:split_v].reshape(1, -1),
+                      'test': labels[split_v:split_t].reshape(1, -1),
+                      'train': labels[split_t:].reshape(1, -1)}
+
+            # create training and validation splits
+            x_val = dataset[:, :split_v]
+            x_test = dataset[:, split_v:split_t]
+            x_train = dataset[:, split_t:]
+
+            x_train, x_val, x_test = self.normalize(x_train, x_val, x_test)
+
+            # add labels to data
+            subid = np.array([sid] * x_val.shape[1]).reshape(1, -1)
+            x_val = np.concatenate((x_val, labels['val'], subid), axis=0)
+
+            subid = np.array([sid] * x_test.shape[1]).reshape(1, -1)
+            x_test = np.concatenate((x_test, labels['test'], subid), axis=0)
+
+            subid = np.array([sid] * x_train.shape[1]).reshape(1, -1)
+            x_train = np.concatenate((x_train, labels['train'], subid), axis=0)
+
+            x_trains.append(x_train)
+            x_tests.append(x_test)
+            x_vals.append(x_val)
+
+        return x_trains, x_vals, x_tests
+
+    def clip(self, x):
+        sorted_ = np.sort(x)
+        clip_vals = sorted_[:, -self.args.num_clip]
+
+        for i in range(x.shape[0]):
+            x[i, :] = np.clip(x[i, :], -clip_vals[i], clip_vals[i])
+
+        return x
+
+    def normalize(self, xtn, xv, xtt):
+        scaler = RobustScaler()
+        xtn = scaler.fit_transform(xtn.T).T
+        xv = scaler.transform(xv.T).T
+        xtt = scaler.transform(xtt.T).T
+
+        return xtn, xv, xtt
+
+    def mulaw(self, x):
+        mu = self.args.mu
+        shape = x.shape
+
+        x = x.reshape(-1)
+        x = np.sign(x)*np.log(1+mu*np.abs(x))/np.log(1+mu)
+
+        digitized = ((x + 1) / 2 * mu+0.5).astype(np.int32)
+        x = 2 * ((digitized).astype(np.float32) / mu) - 1
+
+        x = x.reshape(shape)
+        digitized = digitized.reshape(shape)
+
+        x = np.append(x[:, :-1], digitized[:, 1:], axis=0)
+        return x
+
+    def encode(self, xtn, xv, xtt):
+        self.pca = PCA(self.args.whiten)
+        self.maxabs = MaxAbsScaler()
+
+        xtn = self.pca.fit_transform(xtn.T)
+        xv = self.pca.transform(xv.T)
+        xtt = self.pca.transform(xtt.T)
+
+        xtn = self.clip(xtn.T).T
+
+        xtn = self.maxabs.fit_transform(xtn).T
+        xv = self.maxabs.transform(xv).T
+        xtt = self.maxabs.transform(xtt).T
+
+        xv = np.clip(xv, -1, 1)
+        xtt = np.clip(xtt, -1, 1)
+
+        return self.mulaw(xtn), self.mulaw(xv), self.mulaw(xtt)
+
+    def decode(self, x):
+        pass
+        '''
+
+        x = x / (mu + 1) * 2 - 1
+        x = np.sign(x)*((mu+1)**np.abs(x)-1) / mu
+
+        x = x.reshape(shape)
+        x = maxabs.inverse_transform(x.T)
+        x = pca.inverse_transform(x)
+        x = robust.inverse_transform(x)
+
+        return x.T
+        '''
+
+    def get_batch(self, i, data, split):
+        num_chn = self.args.num_channels
+        sr = self.args.sample_rate
+
+        if i == 0:
+            self.inds[split] = np.random.permutation(data.shape[0])
+
+            chn_ids = torch.multinomial(
+                self.chn_weights, data.shape[0], replacement=True)
+            chn_ids = chn_ids.reshape(-1, 1, 1)
+
+            #chn_weights_sample = self.chn_weights[chn_ids].reshape(-1, 1, 1)
+
+            # reshape to concatenate with data
+            self.chn_ids[split] = torch.repeat_interleave(chn_ids, sr, dim=2)
+            #self.chn_weights_sample[split] = torch.repeat_interleave(
+            #    chn_weights_sample, sr, dim=2)
+
+        # sample random indices
+        inds = self.inds[split][:self.bs[split]]
+        data = data[inds]
+
+        # remove the already sampled indices
+        self.inds[split] = self.inds[split][self.bs[split]:]
+
+        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id,
+        # 1 channel id, 1 channel weight
+        data = {'inputs': data[:, :num_chn, :],
+                'targets': data[:, num_chn:num_chn*2, :].long(),
+                'condition': data[:, -2:-1, :].long(),
+                'sid': data[:, -1:, :].long(),
+                'chnid': self.chn_ids[split][:self.bs[split]]}
+        #        'chn_weights': self.chn_weights_sample[split][:self.bs[split]]}
+
+        # remove the already sampled indices
+        self.chn_ids[split] = self.chn_ids[split][self.bs[split]:]
+        #self.chn_weights_sample[split] = self.chn_weights_sample[split][self.bs[split]:]
+
+        # return data and subject indices
+        return data, data['sid']
+
+    def set_common(self, args=None):
+        if isinstance(self.args.sample_rate, list):
+            w = self.args.sample_rate[1] - self.args.sample_rate[0]
+            self.args.sample_rate = w
+
+        # transform to examples
+        self.x_train_t = self.create_examples(self.x_train_t)
+        self.x_val_t = self.create_examples(self.x_val_t)
+        self.x_test_t = self.create_examples(self.x_test_t)
+
+        super(CichyQuantized, self).set_common(args)
+
+        args.num_channels = args.whiten
+
+        try:
+            self.chn_weights = torch.Tensor(self.chn_weights).float().cuda()
+        except Exception:
+            traceback.print_exc()
+
+    def create_examples(self, x):
+        '''
+        Create examples from the continuous data (x).
+        '''
+        sr = self.args.sample_rate
+        inds = np.arange(x.shape[2] - sr)[::int(sr/2)]
+
+        x = [x[:, :, ind:ind+sr] for ind in inds]
+        x = np.concatenate(x)
+
+        #x = np.array(np.split(inds[1:]))
+
+        return x
+
+    def load_mat_data(self, args):
+        '''
+        Loads ready-to-train splits from mat files.
+        '''
+        chn = args.num_channels
+        x_train_ts = []
+        x_val_ts = []
+        x_test_ts = []
+
+        # load data for each channel
+        for index, i in enumerate(chn):
+            path = os.path.join(args.load_data, 'ch' + str(i) + '.mat')
+            data = loadmat(path)
+
+            x_train_ts.append(np.array(data['x_train_t']))
+            x_val_ts.append(np.array(data['x_val_t']))
+            x_test_ts.append(np.array(data['x_test_t']))
+
+        self.x_train_t = np.array(x_train_ts).transpose(1, 0, 2)
+        self.x_val_t = np.array(x_val_ts).transpose(1, 0, 2)
+        self.x_test_t = np.array(x_test_ts).transpose(1, 0, 2)
+
+        path = os.path.join(args.load_data, 'pca_model')
+        self.pca = pickle.load(open(path, 'rb'))
+
+        path = os.path.join(args.load_data, 'maxabs_scaler')
+        self.maxabs = pickle.load(open(path, 'rb'))
+
+        self.chn_weights = torch.tensor(self.pca.explained_variance_ratio_)
+        #print(self.chn_weights)
+
+    def save_data(self):
+        '''
+        Save final data to disk for easier loading next time.
+        '''
+        for i in range(self.x_train_t.shape[0]):
+            dump = {'x_train_t': self.x_train_t[i:i+1:, :],
+                    'x_val_t': self.x_val_t[i:i+1, :],
+                    'x_test_t': self.x_test_t[i:i+1, :]}
+
+            path = os.path.join(self.args.dump_data, 'ch' + str(i) + '.mat')
+            savemat(path, dump)
+
+        path = os.path.join(self.args.dump_data, 'pca_model')
+        pickle.dump(self.pca, open(path, 'wb'))
+
+        path = os.path.join(self.args.dump_data, 'maxabs_scaler')
+        pickle.dump(self.maxabs, open(path, 'wb'))
 
 
 class CichyDataCPU(CichyData):

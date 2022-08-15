@@ -65,8 +65,12 @@ class WavenetContClass(WavenetClassifier):
         targets = x[:, -1, 0].long()
         out_pred, out_class = self.forward(inputs, sid)
 
+        inds = range(targets.shape[0])
+        if self.args.no_nonepoch:
+            inds = targets < 118
+
         # compute loss
-        loss = self.criterion_class(out_class, targets)
+        loss = self.criterion_class(out_class[inds], targets[inds])
 
         # compute accuracy
         acc_raw = accuracy(out_class, targets).float()
@@ -99,6 +103,12 @@ class WavenetContClass(WavenetClassifier):
         return losses, (out_class, out_pred), acc_raw
 
 
+class WavenetContTimingClass(WavenetContClass):
+    def __init__(self, args):
+        args.num_channels += 1
+        super(WavenetContClass, self).__init__(args)
+
+
 class WavenetContPeakClass(WavenetContClass):
     def __init__(self, args):
         super(WavenetContPeakClass, self).__init__(args)
@@ -106,9 +116,9 @@ class WavenetContPeakClass(WavenetContClass):
             label_smoothing=args.label_smoothing).cuda()
 
     def loss(self, x, i=0, sid=None, train=True, crit=None):
-        losses, out, acc_raw = super(WavenetContPeakClass, self).loss(
+        losses, outs, acc_raw = super(WavenetContPeakClass, self).loss(
             x, i, sid, train, crit)
-        out = out[1]
+        out = outs[1]
 
         # targets for peak classification
         targets = x[:, -2, 0].long()
@@ -121,10 +131,22 @@ class WavenetContPeakClass(WavenetContClass):
 
         # accuracy for peak classification
         acc = accuracy(out[inds], targets[inds])
+
+        # look at examples where peak prediction is correct
+        out_class = outs[0][inds]
+        targets = x[inds, -1, 0].long()
+
+        # calculate accuracy at good peak prediction
+        inds = acc == 1
+        acc_at_peak = accuracy(out_class[inds], targets[inds])
+        acc_at_peak = torch.mean(acc_at_peak.float())
+
         acc = torch.mean(acc.float())
 
         losses['trainloss/Train accuracy peak: '] = acc
         losses['valloss/Validation accuracy peak: '] = acc
+        losses['trainloss/Train acc class peak: '] = acc_at_peak
+        losses['valloss/Validation acc class peak: '] = acc_at_peak
 
         return losses, out, acc_raw
 
@@ -175,6 +197,37 @@ class ConvPoolClassifier(WavenetClassifier):
         x = self.classifier(x.reshape(x.shape[0], -1))
 
         return output, x
+
+
+class ConvPoolContClass(ConvPoolClassifier, WavenetContClass):
+    pass
+
+
+class ConvPoolContTimingClass(ConvPoolClassifier, WavenetContTimingClass):
+    pass
+
+
+class ConvPoolContPeakClass(ConvPoolClassifier, WavenetContPeakClass):
+    def build_model(self, args):
+        ConvPoolClassifier.build_model(self, args)
+
+        num_classes = args.num_classes
+        args.num_classes = args.sample_rate
+        self.peak_classifier = ClassifierModule(args, self.class_dim)
+        args.num_classes = num_classes
+
+    def forward(self, x, sid=None):
+        '''
+        Run wavenet on input then feed the output into the classifier.
+        '''
+        output, x = self.wavenet(x, sid)
+        x = x.reshape(x.shape[0], -1)
+        xc = self.classifier(x)
+
+        # peak classification
+        xp = self.peak_classifier(x)
+
+        return xp, xc
 
 
 class ConvPoolTimeEncoding(ConvPoolClassifier, SimpleClassifierTimeEncoding):

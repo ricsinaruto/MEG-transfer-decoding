@@ -74,3 +74,7 @@ class WavenetQuantized(WavenetFull):
         Get the class label from the one-hot encoding.
         '''
         return torch.argmax(x, axis=1)
+
+
+class WavenetQuantCond(WavenetQuantized):
+    

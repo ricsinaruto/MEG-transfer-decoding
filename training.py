@@ -5,6 +5,7 @@ import sails
 import torch
 import random
 import pickle
+import traceback
 from copy import deepcopy
 
 from scipy import signal
@@ -18,7 +19,7 @@ from torch.nn import MSELoss
 from torch.optim import Adam
 
 from loss import Loss
-from classifiers_linear import LDA
+from classifiers_linear import LDA, LDA_average_trials
 
 
 class Experiment:
@@ -278,7 +279,7 @@ class Experiment:
             batch, sid = self.dataset.get_val_batch(i)
             _, _, acc = self.model.loss(batch, i, sid, train=False)
 
-            accs.append((batch[:, -2, 0], acc.detach()))
+            accs.append((batch[:, -2, 0].cpu(), acc.detach().cpu()))
 
         sid = torch.cat(tuple([loss[0] for loss in accs]))
         loss = torch.cat(tuple([loss[1] for loss in accs]))
@@ -382,10 +383,15 @@ class Experiment:
         Train a separate linear model across time windows.
         '''
         hw = self.args.halfwin
-        times = self.dataset.x_val_t.shape[2]
-        accs = []
+        times = self.dataset.x_test_t.shape[2]
+        train_accs = []
+        val_accs = []
+        test_accs = []
 
-        for i in range(hw, times-hw):
+        if isinstance(self.model, LDA_average_trials):
+            times = times//4
+
+        for i in range(hw, times-hw+1):
             # select input slice
             x_t = self.dataset.x_train_t.clone()
             x_v = self.dataset.x_val_t.clone()
@@ -395,20 +401,35 @@ class Experiment:
             # train model on a specific time window
             acc, _, _ = self.model.run(x_t, x_v, (i-hw, i+end))
             print(acc)
-            accs.append(str(acc))
+            val_accs.append(str(acc))
+
+            acc, _, _ = self.model.eval(x_t, (i-hw, i+end))
+            train_accs.append(str(acc))
+
+            x_t = self.dataset.x_test_t.clone()
+            acc, _, _ = self.model.eval(x_t, (i-hw, i+end))
+            test_accs.append(str(acc))
 
             # save each model
-            with open(self.model_path + str(i), 'wb') as file:
-                pickle.dump(self.model, file)
+            #with open(self.model_path + str(i), 'wb') as file:
+            #    pickle.dump(self.model, file)
 
             # re-initialize model
             self.model.init_model()
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
         with open(path, 'w') as f:
-            f.write('\n'.join(accs))
+            f.write('\n'.join(val_accs))
 
-        return accs
+        path = os.path.join(self.args.result_dir, 'train_loss.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(train_accs))
+
+        path = os.path.join(self.args.result_dir, 'test_loss.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(test_accs))
+
+        return val_accs
 
     def lda_pairwise(self):
         '''

@@ -64,6 +64,9 @@ class SimpleClassifier(Module):
     def build_model(self, args):
         chn = args.num_channels
 
+        if args.trial_average:
+            args.sample_rate = args.trial_average[1] - args.trial_average[0]
+
         # start with a dimension reduction over the channels
         self.spatial_conv = Conv1d(chn, args.dim_red, kernel_size=1, groups=1)
         self.classifier = ClassifierModule(args, args.dim_red*args.sample_rate)
@@ -78,6 +81,13 @@ class SimpleClassifier(Module):
         Run a dimension reduction over the channels then run the classifier.
         '''
         x = self.spatial_conv(x)
+
+        if self.args.trial_average:
+            timing = self.args.trial_average
+            x = x.reshape(x.shape[0], x.shape[1], 4, -1)
+            x = torch.mean(x, dim=2)
+            x = x[:, :, timing[0]:timing[1]]
+
         x = self.classifier.activation(self.classifier.dropout(x))
         x = self.classifier(x.reshape(x.shape[0], -1))
 
@@ -123,7 +133,7 @@ class SimpleClassifier(Module):
         '''
         Apply regularization on the weights.
         '''
-        new_weights = [layer.weight.view(-1) for layer in self.classifier.layers]
+        new_weights = [layr.weight.view(-1) for layr in self.classifier.layers]
         new_weights.append(self.spatial_conv.weight.view(-1))
 
         new_weights = torch.cat(new_weights)
@@ -134,6 +144,7 @@ class SimpleClassifier(Module):
         Run the model in forward mode and compute loss for this batch.
         '''
         inputs = x[:, :self.args.num_channels, :]
+
         targets = x[:, -1, 0].long()
         out_pred, out_class = self.forward(inputs, sid)
 

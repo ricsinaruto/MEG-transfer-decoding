@@ -1,11 +1,16 @@
 import torch
 import numpy as np
 import sys
+import pywt
 
 from mne.time_frequency import tfr_array_morlet
 
+from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
+
 from pyriemann.estimation import XdawnCovariances, ERPCovariances
 from pyriemann.tangentspace import TangentSpace
+
+from xgboost import XGBClassifier
 
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
@@ -14,6 +19,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
 
 
 class LDA:
@@ -154,11 +160,228 @@ class LDA:
         return data
 
 
+class XGBoost(LDA):
+    def init_model(self):
+        self.model = XGBClassifier(objective='multi:softmax',
+                                   reg_lambda=25,
+                                   reg_alpha=25)
+        self.fit_pca = False
+
+
+class XGBoostPramit(LDA):
+    def init_model(self):
+        self.fit_pca = False
+        self.model = XGBClassifier(objective='multi:softmax',
+                                   eta=0.5,
+                                   max_depth=6,
+                                   nthread=12,
+                                   subsample=0.9,
+                                   )
+
+
+class XGBoost_hyperopt(XGBoost):
+    def objective(self, space):
+        clf = XGBClassifier(objective='multi:softmax',
+                            reg_lambda=space['reg_lambda'],
+                            eta=space['eta'],
+                            n_estimators=space['n_estimators'],
+                            max_depth=int(space['max_depth']),
+                            gamma=space['gamma'],
+                            reg_alpha=space['reg_alpha'],
+                            min_child_weight=int(space['min_child_weight']),
+                            colsample_bytree=space['colsample_bytree'])
+
+        clf.fit(self.data[0][0], self.data[0][1],
+                eval_set=self.data, eval_metric="auc",
+                early_stopping_rounds=10, verbose=False)
+
+        accuracy = clf.score(self.data[1][0], self.data[1][1])
+        print("SCORE:", accuracy)
+        return {'loss': -accuracy, 'status': STATUS_OK}
+
+    def run(self, x_train, x_val, window=None):
+        self.window = window
+        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val)
+        self.data = [(x_train, y_train), (x_val, y_val)]
+
+        space = {'max_depth': hp.quniform("max_depth", 3, 18, 1),
+                 'gamma': hp.uniform('gamma', 1, 9),
+                 'reg_alpha': hp.uniform('reg_alpha', 0, 10),
+                 'reg_lambda': hp.uniform('reg_lambda', 0, 10),
+                 'eta': hp.uniform('eta', 0.01, 0.2),
+                 'colsample_bytree': hp.uniform('colsample_bytree', 0.5, 1),
+                 'min_child_weight': hp.quniform('min_child_weight', 0, 10, 1),
+                 'n_estimators': 180}
+
+        trials = Trials()
+
+        best_hyperparams = fmin(fn=self.objective,
+                                space=space,
+                                algo=tpe.suggest,
+                                max_evals=100,
+                                trials=trials)
+
+        space = best_hyperparams
+        self.model = XGBClassifier(
+            objective='multi:softmax',
+            reg_lambda=space['reg_lambda'],
+            eta=space['eta'],
+            max_depth=int(space['max_depth']),
+            gamma=space['gamma'],
+            reg_alpha=space['reg_alpha'],
+            min_child_weight=int(space['min_child_weight']),
+            colsample_bytree=space['colsample_bytree'])
+        self.model.fit(x_train, y_train)
+
+        # validation accuracy
+        acc = self.model.score(x_val, y_val)
+
+        return acc, None, None
+
+
+class LDA_average(LDA):
+    def prep_lda(self, data):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        ave_len = self.args.ave_len
+        num_ave = int(self.ts/ave_len)
+
+        for i in range(num_ave):
+            data[:, i, :] = np.mean(
+                data[:, ave_len*i:ave_len*(i+1), :], axis=1)
+
+        data = data[:, :num_ave, :]
+        print(data.shape)
+        data = data.reshape(data.shape[0], -1)
+
+        return data
+
+
+class LDA_cov(LDA):
+    def prep_lda(self, data):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+
+        data_cov = []
+        for i in range(data.shape[0]):
+            mat = np.triu(np.cov(data[i])).reshape(-1)
+            data_cov.append(mat[mat != 0])
+
+        return np.array(data_cov)
+
+
+class LDA_cov_normed(LDA_cov):
+    def transform_data(self, x_train, x_val):
+        '''
+        Prepare and apply PCA and standardization if needed.
+        '''
+        self.lda_norm = False
+        x_train, x_val, y_train, y_val = super(
+            LDA_cov_normed, self).transform_data(x_train, x_val)
+
+        if self.fit_pca:
+            self.norm.fit(x_train)
+        x_train = self.norm.transform(x_train)
+        x_val = self.norm.transform(x_val)
+
+        return x_train, x_val, y_train, y_val
+
+    def eval(self, x_val, window=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+
+        if not self.args.load_conv:
+            x_val = self.pca.transform(x_val)
+
+        x_val = self.prep_lda(x_val)
+        x_val = self.norm.transform(x_val)
+
+        return self.model.score(x_val, y_val), x_val, y_val
+
+
+class XGBoost_cov(LDA_cov, XGBoost):
+    pass
+
+
+class XGBoostPramit_cov(LDA_cov, XGBoostPramit):
+    pass
+
+
+class XGBoost_hyperopt_cov(LDA_cov, XGBoost_hyperopt):
+    pass
+
+
+class LDA_average_trials(LDA):
+    def prep_lda(self, data):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        print(data.shape)
+        data = data.reshape(data.shape[0], 4, -1, data.shape[2])
+        data = np.mean(data, axis=1)
+
+        if self.window is not None:
+            data = data[:, self.window[0]:self.window[1], :]
+
+        print(data.shape)
+        data = data.reshape(data.shape[0], -1)
+
+        return data
+
+
+class LDA_cov_across_trials(LDA):
+    def prep_lda(self, data):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.reshape(data.shape[0], 4, -1, data.shape[2])
+        #data = data.reshape(data.shape[0], 4, -1)
+
+        data_cov = []
+        for b in range(data.shape[0]):
+            channels = []
+            for c in range(data.shape[3]):
+                mat = np.triu(np.cov(data[b, :, :, c])).reshape(-1)
+                channels.append(mat[mat != 0])
+
+            data_cov.append(np.array(channels))
+
+        data_cov = np.array(data_cov)
+
+        return data_cov.reshape(data.shape[0], -1)
+
+
+class LDA_avg_trials_cov(LDA):
+    def prep_lda(self, data):
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.reshape(data.shape[0], 4, -1, data.shape[2])
+        data = np.mean(data, axis=1)
+
+        data = data.transpose(0, 2, 1)
+
+        data_cov = []
+        for i in range(data.shape[0]):
+            mat = np.triu(np.cov(data[i])).reshape(-1)
+            data_cov.append(mat[mat != 0])
+
+        return np.array(data_cov)
+
+
 class LDA_riemann(LDA):
     def __init__(self, args):
         super(LDA_riemann, self).__init__(args)
         #self.cov = ERPCovariances(estimator='lwf')
-        self.cov = XdawnCovariances(nfilter=8)
+        self.cov = XdawnCovariances(nfilter=2)
         self.tangent = TangentSpace(metric="riemann")
 
     def prep_lda(self, data):
@@ -199,6 +422,19 @@ class LDA_riemann(LDA):
         x_val = self.tangent.transform(x_val)
 
         return x_train, x_val, y_train, y_val
+
+    def eval(self, x_val, window=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+
+        x_val = self.prep_lda(x_val)
+        x_val = self.cov.transform(x_val)
+        x_val = self.tangent.transform(x_val)
+
+        return self.model.score(x_val, y_val), x_val, y_val
 
 
 class LDA_wavelet(LDA):
@@ -248,6 +484,36 @@ class LDA_wavelet(LDA):
         data = data[:, :, self.window[0], :].reshape(trials, -1)
 
         #data = np.append(data.real, data.imag, axis=1)
+        print('Data shape: ', data.shape)
+
+        return data
+
+
+class LDA_wavelet_all(LDA_wavelet):
+    def wavelet(self, data):
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+        trials = data.shape[0]
+
+        # STFT
+        data = data.reshape(-1, data.shape[2])
+        data = torch.fft.rfft(torch.Tensor(data))
+        data = data.numpy()
+
+        data = data[:, ::5]
+        data = np.concatenate((data.real, data.imag), axis=1)
+
+        return trials, data
+
+    def prep_lda(self, data):
+        '''
+        Apply wavelet transform when preparing data.
+        '''
+        trials, data = self.wavelet(data)
+        data = data.reshape(trials, -1, data.shape[1])
+        print(data.shape)
+        data = data.reshape(trials, -1)
+
         print('Data shape: ', data.shape)
 
         return data
@@ -377,6 +643,82 @@ class SVM(LDA):
     def __init__(self, args):
         super(SVM, self).__init__(args)
         self.model = SVC()
+
+
+class SVM_db4(LDA):
+    def init_model(self):
+        self.model = SVC(kernel='poly', degree=2, C=100)
+        self.fit_pca = False
+
+    def wavelet(self, data):
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+        trials = data.shape[0]
+
+        # db4
+        coeffs = pywt.wavedec(data, 'db4', level=7)
+        coeffs[-1] = np.zeros_like(coeffs[-1])
+        coeffs[-2] = np.zeros_like(coeffs[-2])
+
+        #data_denoised = pywt.waverec(coeffs, 'db4')
+
+        feats = []
+        for c in coeffs[:-2]:
+            rms = np.sqrt(np.mean(c**2, axis=-1))
+            feats.append(rms)
+
+        feats = np.array(feats).transpose(1, 0, 2)
+
+        return trials, feats
+
+    def transform_data(self, x_train, x_val):
+        '''
+        Prepare and apply PCA and standardization if needed.
+        '''
+        self.lda_norm = False
+        x_train, x_val, y_train, y_val = super(
+            SVM_db4, self).transform_data(x_train, x_val)
+
+        if self.fit_pca:
+            self.norm.fit(x_train)
+        x_train = self.norm.transform(x_train)
+        x_val = self.norm.transform(x_val)
+
+        return x_train, x_val, y_train, y_val
+
+    def prep_lda(self, data):
+        '''
+        Apply wavelet transform when preparing data.
+        '''
+        trials, data = self.wavelet(data)
+        #print(data.shape)
+        data = data.reshape(trials, -1)
+
+        print('Data shape: ', data.shape)
+
+        return data
+
+    def eval(self, x_val, window=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+
+        if not self.args.load_conv:
+            x_val = self.pca.transform(x_val)
+
+        x_val = self.prep_lda(x_val)
+        x_val = self.norm.transform(x_val)
+
+        return self.model.score(x_val, y_val), x_val, y_val
+
+
+class LDA_db4(SVM_db4):
+    def init_model(self):
+        self.model = LinearDiscriminantAnalysis(solver='lsqr',
+                                                shrinkage='auto')
+        self.fit_pca = False
 
 
 class QDA(LDA):

@@ -788,9 +788,12 @@ class WavenetSimpleShared(WavenetSimple):
     '''
     def __init__(self, args):
         super(WavenetSimpleShared, self).__init__(args)
+        ch = self.ch
         self.inp_ch = 1
         self.out_ch = 1
         self.build_model(args)
+
+        self.ch = ch
 
     def forward(self, x, sid=None):
         bs = x.shape[0]
@@ -798,7 +801,9 @@ class WavenetSimpleShared(WavenetSimple):
         x = x.reshape(-1, 1, x.shape[2])
         out, x = super(WavenetSimpleShared, self).forward(x)
 
-        return out.reshape(bs, chn, -1), x.reshape(bs, chn, -1, x.shape[2])
+        x = x.reshape(bs, chn, -1, x.shape[2])
+        # this changed from the correct behaviour for experimentation
+        return out.reshape(bs, chn, -1), x.reshape(bs, -1, x.shape[3])
 
 
 class WavenetSimpleChannelUp(WavenetSimple):
