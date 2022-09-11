@@ -1,7 +1,9 @@
-from torch.nn import Sequential, Conv1d, Module, CrossEntropyLoss, Embedding
+from torch.nn import Sequential, Conv1d, Module, CrossEntropyLoss, Embedding, Softmax
 import torch
 import torch.nn.functional as F
 import numpy as np
+
+import os
 
 from wavenets_simple import WavenetSimple
 from classifiers_simpleNN import accuracy
@@ -28,6 +30,7 @@ class WavenetLayer(Module):
                  bias=False):
         super(WavenetLayer, self).__init__()
 
+        in_channels = in_channels or residual_channels
         self.shift = shift
         self.kernel_size = kernel_size
         self.dilation = dilation
@@ -179,6 +182,8 @@ class WavenetFull(WavenetSimple):
         self.cond_emb = Embedding(args.num_classes, args.class_emb)
         self.channel_emb = Embedding(args.num_channels, args.channel_emb)
 
+        self.softmax = torch.nn.Softmax(dim=-1)
+
         shift = args.sample_rate - args.rf
 
         layers = [
@@ -200,7 +205,6 @@ class WavenetFull(WavenetSimple):
                 shift=shift,
                 kernel_size=args.kernel_size,
                 dilation=d,
-                in_channels=args.num_channels,
                 residual_channels=args.residual_channels,
                 dilation_channels=args.dilation_channels,
                 skip_channels=args.skip_channels,
@@ -265,19 +269,35 @@ class WavenetFull(WavenetSimple):
 
         # have to make sure this exactly matches the inteded targets
         targets = targets[:, -logits.shape[1]:]
+        target_shape = targets.shape
+        targets = targets.reshape(-1)
+        logits = logits.reshape(-1, logits.shape[-1])
 
-        #chn_weights = data['chn_weights'][:, 0, 0]
+        chn_weights = data['chn_weights'][:, 0, 0]
+
         loss = self.criterion(logits, targets)
-        loss = torch.mean(loss, dim=1)# * chn_weights
+        loss_batch = torch.mean(loss.reshape(target_shape), dim=1)  # * chn_weights
         loss = torch.mean(loss)
 
-        acc = accuracy(logits, targets).float().mean()
+        acc = torch.mean(accuracy(logits, targets).float())
+        weighted_loss = torch.mean(loss_batch*chn_weights)
+
+        if acc > 2:
+            out_save = logits.detach().cpu().numpy()
+            np.save(self.args.result_dir + '/outputs.npy', out_save)
+            target_save = targets.detach().cpu().numpy()
+            np.save(self.args.result_dir + '/targets.npy', target_save)
+
+            torch.save(self,
+                       os.path.join(self.args.result_dir, 'model_bestacc.pt'),
+                       pickle_protocol=4)
 
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss,
                   'valloss/Validation accuracy: ': acc,
-                  'trainloss/Train accuracy: ': acc}
+                  'trainloss/Train accuracy: ': acc,
+                  'trainloss/weighted loss: ': weighted_loss}
 
         return losses, None, None
 

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from classifiers_linear import LDA
+from classifiers_simpleNN import SimpleClassifier
 from wavenets_simple import WavenetSimple
 from wavenets_full import WavenetFull
 from classifiers_wavenet import WavenetClassifier, WavenetContClass
@@ -11,7 +12,7 @@ from cichy_data import CichyData, CichyContData, CichyQuantized
 
 
 class Args:
-    gpu = '1'  # cuda gpu index
+    gpu = '0'  # cuda gpu index
     func = {'train': True}  # dict of functions to run from training.py
 
     def __init__(self):
@@ -21,36 +22,37 @@ class Args:
         self.name = 'args.py'  # name of this file, don't change
         self.common_dataset = False
         self.load_dataset = True  # whether to load self.dataset
-        self.learning_rate = 0.01  # learning rate for Adam
+        self.learning_rate = 0.00005  # learning rate for Adam
         self.max_trials = 1  # ratio of training data (1=max)
-        self.batch_size = 256  # batch size for training and validation data
-        self.epochs = 500  # number of loops over training data
-        self.val_freq = 5  # how often to validate (in epochs)
-        self.print_freq = 1  # how often to print metrics (in epochs)
+        self.batch_size = 400  # batch size for training and validation data
+        self.epochs = 2000  # number of loops over training data
+        self.val_freq = 20  # how often to validate (in epochs)
+        self.print_freq = 5  # how often to print metrics (in epochs)
         self.save_curves = True  # whether to save loss curves to file
-        self.load_model = False  # either False or path to model(s) to load
+        self.load_model = False
         self.result_dir = [os.path.join(  # path(s) to save model and others
             'results',
-            'cichy_epoched',
-            'subj1',
-            'cont_quantized')]
-        self.model = WavenetFull  # class of model to use
-        self.dataset = CichyQuantized  # dataset class for loading and handling data
+            'things_epoched',
+            'wavenetclass_120hz',
+            'subj0')]
+        self.model = WavenetClassifier  # class of model to use
+        self.dataset = CichyData  # dataset class for loading and handling data
 
         # wavenet arguments
-        self.activation = torch.nn.Identity()  # activation function for models
+        self.activation = torch.asinh  # activation function for models
         self.subjects = 0  # number of subjects used for training
         self.embedding_dim = 0  # subject embedding size
-        self.p_drop = 0.6  # dropout probability
+        self.p_drop = 0.5  # dropout probability
         self.ch_mult = 2  # channel multiplier for hidden channels in wavenet
         self.kernel_size = 2  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 512]  # start and end of timesteps within trials
-        self.rf = 256  # receptive field of wavenet
-        rf = 256
+        self.sample_rate = [0, 256]  # start and end of timesteps within trials
+        self.rf = 8  # receptive field of wavenet
+        rf = 8
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
-        self.dilations = [ks**i for i in range(nl)]  # dilation: 2^num_layers
+        dilations = [ks**i for i in range(nl)]
+        self.dilations = dilations   # dilation: 2^num_layers
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
@@ -62,38 +64,40 @@ class Args:
         self.reg_semb = True  # whether to regularize subject embedding
         self.fixed_wavenet = False  # whether to fix weights of wavenet
         self.alpha_norm = 0.0  # regularization multiplier on weights
-        self.num_classes = 119  # number of classes for classification
-        self.units = [800, 300]  # hidden layer sizes of fully-connected block
+        self.num_classes = 1854  # number of classes for classification
+        self.units = [100, 100]  # hidden layer sizes of fully-connected block
         self.dim_red = 80  # number of pca components for channel reduction
         self.stft_freq = 0  # STFT frequency index for LDA_wavelet_freq model
         self.decode_peak = 0.1
+        self.trial_average = False
 
         # quantized wavenet arguments
         self.mu = 255
-        self.residual_channels = 306
-        self.dilation_channels = 306
-        self.skip_channels = 712
+        self.residual_channels = 1024
+        self.dilation_channels = 1024
+        self.skip_channels = 1024
         self.class_emb = 10
         self.channel_emb = 30
         self.cond_channels = self.class_emb + self.channel_emb
-        self.head_channels = 306
+        self.head_channels = int(self.skip_channels/2)
         self.conv_bias = False
 
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
-                                 'cichy118_cont', 'preproc_data_onepass', 'cont', 'sub_folders')
-        self.data_path = [os.path.join(data_path, 'subj1')]  # path(s) to data directory
-        self.num_channels = list(range(614))  # channel indices
+                                 'THINGS-MEG', 'preprocessed', '120hz_lowpass')
+        self.data_path = [os.path.join(data_path, 'subj0')]  # path(s) to data directory
+        self.num_channels = list(range(273))  # channel indices
         self.numpy = True  # whether data is saved in numpy format
         self.crop = 1  # cropping ratio for trials
-        self.whiten = 306  # pca components used in whitening
+        self.whiten = 272  # pca components used in whitening
         self.group_whiten = False  # whether to perform whitening at the GL
         self.split = np.array([0, 0.2])  # validation split (start, end)
-        self.sr_data = 250  # sampling rate used for downsampling
+        self.sr_data = 240  # sampling rate used for downsampling
+        self.original_sr = 1200
         self.save_data = True  # whether to save the created data
         self.subjects_data = False  # list of subject inds to use in group data
         self.num_clip = 25
-        self.dump_data = [os.path.join(data_path, 'subj1', 'cont_quantized')]  # path(s) for dumping data
+        self.dump_data = [os.path.join(data_path, 'subj0', 'train_data_pca306', 'c')]  # path(s) for dumping data
         self.load_data = self.dump_data  # path(s) for loading data files
 
         # analysis arguments
@@ -101,7 +105,7 @@ class Args:
         self.PFI_inverse = False  # invert which channels/timesteps to shuffle
         self.pfich_timesteps = [0, 256]  # time window for spatiotemporal PFI
         self.PFI_perms = 20  # number of PFI permutations
-        self.halfwin = 5  # half window size for temporal PFI
+        self.halfwin = 30  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
         self.generate_length = self.sr_data * 1000  # generated timeseries len

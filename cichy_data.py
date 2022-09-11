@@ -270,7 +270,7 @@ class CichyData(MRCData):
         x = x.transpose(0, 1, 3, 2)
 
         # downsample data if needed
-        resample = int(1000/self.args.sr_data)
+        resample = int(self.args.original_sr/self.args.sr_data)
         x = x[:, :, :, ::resample]
         timesteps = x.shape[3]
         trials = x.shape[1]
@@ -810,12 +810,12 @@ class CichyQuantized(MRCData):
                 self.chn_weights, data.shape[0], replacement=True)
             chn_ids = chn_ids.reshape(-1, 1, 1)
 
-            #chn_weights_sample = self.chn_weights[chn_ids].reshape(-1, 1, 1)
+            chn_weights_sample = self.chn_weights[chn_ids].reshape(-1, 1, 1)
 
             # reshape to concatenate with data
             self.chn_ids[split] = torch.repeat_interleave(chn_ids, sr, dim=2)
-            #self.chn_weights_sample[split] = torch.repeat_interleave(
-            #    chn_weights_sample, sr, dim=2)
+            self.chn_weights_sample[split] = torch.repeat_interleave(
+                chn_weights_sample, sr, dim=2)
 
         # sample random indices
         inds = self.inds[split][:self.bs[split]]
@@ -830,12 +830,12 @@ class CichyQuantized(MRCData):
                 'targets': data[:, num_chn:num_chn*2, :].long(),
                 'condition': data[:, -2:-1, :].long(),
                 'sid': data[:, -1:, :].long(),
-                'chnid': self.chn_ids[split][:self.bs[split]]}
-        #        'chn_weights': self.chn_weights_sample[split][:self.bs[split]]}
+                'chnid': self.chn_ids[split][:self.bs[split]],
+                'chn_weights': self.chn_weights_sample[split][:self.bs[split]]}
 
         # remove the already sampled indices
         self.chn_ids[split] = self.chn_ids[split][self.bs[split]:]
-        #self.chn_weights_sample[split] = self.chn_weights_sample[split][self.bs[split]:]
+        self.chn_weights_sample[split] = self.chn_weights_sample[split][self.bs[split]:]
 
         # return data and subject indices
         return data, data['sid']
@@ -850,6 +850,12 @@ class CichyQuantized(MRCData):
         self.x_val_t = self.create_examples(self.x_val_t)
         self.x_test_t = self.create_examples(self.x_test_t)
 
+        # only use subset of data
+        sampling = int(1/args.max_trials)
+        self.x_train_t = self.crop_trials(self.x_train_t, sampling)
+        self.x_val_t = self.crop_trials(self.x_val_t, sampling)
+        self.x_test_t = self.crop_trials(self.x_test_t, sampling)
+
         super(CichyQuantized, self).set_common(args)
 
         args.num_channels = args.whiten
@@ -858,6 +864,10 @@ class CichyQuantized(MRCData):
             self.chn_weights = torch.Tensor(self.chn_weights).float().cuda()
         except Exception:
             traceback.print_exc()
+
+    def crop_trials(self, data, sampling):
+        inds = np.arange(data.shape[0])[::sampling]
+        return data[inds]
 
     def create_examples(self, x):
         '''
