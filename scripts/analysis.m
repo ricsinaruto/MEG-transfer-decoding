@@ -35,11 +35,11 @@ end
 
 %%
 figure;
-[Xpxx, Xf] = pwelch(X(1, :), fs, fs/2, 5.0:0.1:100, fs);
+[Xpxx, Xf] = pwelch(X(1, :), fs, fs/2, 1.0:0.1:100, fs);
 plot(Xf, Xpxx);
-for i = 1:size(freqs, 2)
-    xline(freqs(i), 'red');
-end
+%for i = 1:size(freqs, 2)
+%    xline(freqs(i), 'red');
+%end
 %%
 figure;
 plot(X(1, 5000:6000));
