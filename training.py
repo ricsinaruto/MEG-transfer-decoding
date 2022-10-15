@@ -94,7 +94,8 @@ class Experiment:
         Main training loop over epochs and training batches.
         '''
         # initialize optimizer
-        optimizer = Adam(self.model.parameters(),
+        params = filter(lambda p: p.requires_grad, self.model.parameters())
+        optimizer = Adam(params,
                          lr=self.args.learning_rate,
                          weight_decay=self.args.alpha_norm)
 
@@ -411,8 +412,8 @@ class Experiment:
             test_accs.append(str(acc))
 
             # save each model
-            #with open(self.model_path + str(i), 'wb') as file:
-            #    pickle.dump(self.model, file)
+            with open(self.model_path + str(i), 'wb') as file:
+                pickle.dump(self.model, file)
 
             # re-initialize model
             self.model.init_model()
@@ -488,6 +489,18 @@ class Experiment:
 
                 acc = self.model.eval(x_val)
                 f.write(str(acc) + '\n')
+
+    def lda_eval_train(self):
+        '''
+        Evaluate any linear classifier on the train data of another dataset.
+        '''
+
+        path = os.path.join(self.args.result_dir, 'train.txt')
+        with open(path, 'w') as f:
+            x_train = self.dataset.x_train_t
+
+            acc, _, _ = self.model.eval(x_train)
+            f.write(str(acc) + '\n')
 
     def repeat_baseline(self):
         '''
@@ -1383,7 +1396,7 @@ def main(Args):
 
             # load learned dimensionality reduction for linear models
             if args_new.load_conv:
-                if 'model.pt' not in args_new.load_conv:
+                if '.pt' not in args_new.load_conv:
                     args_new.load_conv = os.path.join(
                         args_new.load_conv, 'cv' + str(n), 'model.pt')
 
@@ -1452,6 +1465,8 @@ def main(Args):
                 e.test()
             if Args.func.get('LDA_eval'):
                 e.lda_eval()
+            if Args.func.get('lda_eval_train'):
+                e.lda_eval_train()
             if Args.func.get('window_eval'):
                 e.window_eval()
             if Args.func.get('PFIts'):

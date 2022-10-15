@@ -1,4 +1,5 @@
-from torch.nn import Sequential, Conv1d, Module, CrossEntropyLoss, Embedding, Softmax
+from torch.nn import Sequential, Conv1d, Module, CrossEntropyLoss, Embedding
+from torch.nn import Softmax
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -177,21 +178,25 @@ class WavenetFull(WavenetSimple):
         self.criterion = CrossEntropyLoss(reduction='none').cuda()
 
     def build_model(self, args):
+        self.quant_levels = args.mu + 1
+        shift = args.sample_rate - args.rf
+
         # embeddings for various conditioning
         self.subject_emb = Embedding(args.subjects, args.embedding_dim)
         self.cond_emb = Embedding(args.num_classes, args.class_emb)
-        self.channel_emb = Embedding(args.num_channels, args.channel_emb)
+        self.quant_emb = Embedding(self.quant_levels, args.quant_emb)
 
-        self.softmax = torch.nn.Softmax(dim=-1)
+        self.softmax = Softmax(dim=-1)
 
-        shift = args.sample_rate - args.rf
+        self.pca_w = Conv1d(args.num_channels, args.dim_red, kernel_size=1)
 
+        # initial convolution
         layers = [
             WavenetLayer(
                 shift=shift,
                 kernel_size=1,
                 dilation=1,
-                in_channels=args.num_channels,
+                in_channels=args.dim_red,
                 residual_channels=args.residual_channels,
                 dilation_channels=args.dilation_channels,
                 skip_channels=args.skip_channels,
@@ -217,12 +222,13 @@ class WavenetFull(WavenetSimple):
         self.layers = torch.nn.ModuleList(layers)
 
         self.conditioning_channels = args.cond_channels
-        self.quantization_levels = args.mu + 1
+        self.out_channels = args.num_channels * args.quant_emb
+        
         self.logits = WaveNetLogitsHead(
             skip_channels=args.skip_channels,
             residual_channels=args.residual_channels,
             head_channels=args.head_channels,
-            out_channels=self.quantization_levels,
+            out_channels=self.out_channels,
             bias=True,
         )
 
@@ -246,58 +252,57 @@ class WavenetFull(WavenetSimple):
         cond_ind = data['condition']
         cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
 
-        # set elements of no condition to zero
-        cond_ind = (cond_ind > 0).float()
-        cond *= cond_ind
+        # set elements of cond to 0 where cond_ind is 0
+        cond = cond * (cond_ind != 0).float()
 
-        chn = self.channel_emb(data['chnid'].squeeze()).permute(0, 2, 1)
-        c = torch.cat((cond, chn), dim=1)
+        # apply embedding to inputs and squeeze embeddings to last dim
+        x = self.quant_emb(x)
+        timesteps = x.shape[-2]
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+        
+        # apply pca and expand last dim, then reshape to (B, C, T)
+        x = self.pca_w(x)
+        x = x.reshape(x.shape[0], x.shape[1], timesteps, -1)
+        x = x.permute(0, 1, 3, 2)
+        x = x.reshape(x.shape[0], -1, timesteps)
 
         skips = []
         for layer in self.layers:
-            x, skip = layer(x, c=c, causal_pad=causal_pad)
+            x, skip = layer(x, c=cond, causal_pad=causal_pad)
             skips.append(skip)
 
-        return self.logits(x, skips).permute(0, 2, 1)
+        out = self.logits(x, skips)
+
+        # reshape to get (B, C, Q, T) -> (B, C, T, Q)
+        out = out.reshape(
+            out.shape[0], self.args.num_channels, -1, out.shape[-1])
+        out = out.permute(0, 1, 3, 2)
+
+        # apply transposed embedding to outputs
+        out = out @ self.quant_emb.weight.T
+
+        return out
 
     def loss(self, data, i=0, sid=None, train=True, criterion=None):
         logits = self.forward(data)
-        chnids = data['chnid'][:, 0, 0]
-
-        # only select targets for current channel
-        targets = data['targets'][np.arange(logits.shape[0]), chnids, :]
 
         # have to make sure this exactly matches the inteded targets
-        targets = targets[:, -logits.shape[1]:]
-        target_shape = targets.shape
+        targets = data['targets']
+        targets = targets[:, :, -logits.shape[1]:]
+
         targets = targets.reshape(-1)
         logits = logits.reshape(-1, logits.shape[-1])
 
-        chn_weights = data['chn_weights'][:, 0, 0]
-
         loss = self.criterion(logits, targets)
-        loss_batch = torch.mean(loss.reshape(target_shape), dim=1)  # * chn_weights
         loss = torch.mean(loss)
 
         acc = torch.mean(accuracy(logits, targets).float())
-        weighted_loss = torch.mean(loss_batch*chn_weights)
-
-        if acc > 2:
-            out_save = logits.detach().cpu().numpy()
-            np.save(self.args.result_dir + '/outputs.npy', out_save)
-            target_save = targets.detach().cpu().numpy()
-            np.save(self.args.result_dir + '/targets.npy', target_save)
-
-            torch.save(self,
-                       os.path.join(self.args.result_dir, 'model_bestacc.pt'),
-                       pickle_protocol=4)
 
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss,
                   'valloss/Validation accuracy: ': acc,
-                  'trainloss/Train accuracy: ': acc,
-                  'trainloss/weighted loss: ': weighted_loss}
+                  'trainloss/Train accuracy: ': acc}
 
         return losses, None, None
 
@@ -356,25 +361,6 @@ class WavenetFull(WavenetSimple):
         log_px = torch.logsumexp(log_pxys, -1)
         py_x = torch.exp(log_pxys - log_px.unsqueeze(-1))
         return py_x, data['targets']
-
-    def kernel_network_FIR_loop(self, folder, x):
-        '''
-        Implements loop over the network to get kernel output at each layer.
-        '''
-        block = zip(
-            self.filter, self.gate, self.conv_res, self.tanh, self.sigmoid)
-
-        for i, (filt_, gate, conv_res, tanh, sigmoid) in enumerate(block):
-            self.kernel_FIR_plot(folder, x, i, filt_, 'filter')
-            self.kernel_FIR_plot(folder, x, i, gate, 'gate')
-
-            xf = filt_(x)
-            xg = gate(x)
-            xo = tanh(xf)*sigmoid(xg)
-            xo = self.dropout(xo)
-
-            xc = conv_res(xo)
-            x = x[:, :, -xc.shape[2]:] + xc
 
 
 class WavenetFullSimple(WavenetSimple):

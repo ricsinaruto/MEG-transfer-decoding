@@ -5,7 +5,7 @@ import numpy as np
 from scipy.io import loadmat
 
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 
 from donders_data import DondersData
 

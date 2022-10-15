@@ -27,6 +27,7 @@ event_dict = {#'event_off':1,
               #'button/4':2048
              }
 
+# NEED TO INTERPOLATE BAD CHANNELS
 
 dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/preproc250hz_deb'
 outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/preproc250hz_deb/inner_speech_sub_debchn2'

@@ -1,5 +1,4 @@
 import os
-import sys
 import torch
 import random
 import pickle
@@ -318,6 +317,35 @@ class CichyDataCrossval(CichyData):
         return x_train, x_val, x_test
 
 
+class CichyDataRobust(CichyData):
+    def normalize(self, x_train, x_val, x_test):
+        '''
+        Standardize and whiten data if needed.
+        '''
+        # standardize dataset along channels
+        self.norm = RobustScaler()
+        self.norm.fit(x_train)
+        x_train = self.norm.transform(x_train)
+        x_val = self.norm.transform(x_val)
+        x_test = self.norm.transform(x_test)
+
+        # if needed, remove covariance with PCA
+        if self.args.whiten:
+            x_train, x_val, x_test = self.whiten(x_train, x_val, x_test)
+
+        return x_train.T, x_val.T, x_test.T
+
+
+class CichyDataNoNorm(CichyData):
+    def normalize(self, x_train, x_val, x_test):
+        self.norm = RobustScaler()
+        return x_train.T, x_val.T, x_test.T
+
+
+class CichyDataCrossvalRobust(CichyDataCrossval, CichyDataRobust):
+    pass
+
+
 class CichyDataCrossvalNoNorm(CichyDataCrossval):
     def normalize(self, x_train, x_val, x_test):
         self.norm = StandardScaler()
@@ -634,8 +662,8 @@ class CichyQuantized(MRCData):
         self.x_val_t = np.append(xv, x_vals[-2:, :-1], axis=0)
         self.x_test_t = np.append(xtt, x_tests[-2:, :-1], axis=0)
 
-        if not os.path.isdir(os.path.split(args.dump_data)[0]):
-            os.mkdir(os.path.split(args.dump_data)[0])
+        if not os.path.isdir(args.dump_data):
+            os.mkdir(args.dump_data)
 
         self.save_data()
         self.set_common(args)
@@ -669,7 +697,7 @@ class CichyQuantized(MRCData):
             event_times = np.load(ev_path)
             event_times = [(int(ev[0]/resample), ev[2]) for ev in event_times]
 
-            dataset = np.load(path).T
+            dataset = np.load(path)
 
             # choose first 306 channels and downsample
             dataset = dataset[args.num_channels, ::resample]
@@ -732,7 +760,7 @@ class CichyQuantized(MRCData):
 
         return x_trains, x_vals, x_tests
 
-    def clip(self, x):
+    def clip_(self, x):
         sorted_ = np.sort(x)
         clip_vals = sorted_[:, -self.args.num_clip]
 
@@ -750,6 +778,9 @@ class CichyQuantized(MRCData):
         return xtn, xv, xtt
 
     def mulaw(self, x):
+        '''
+        Apply mu-law companding to input data.
+        '''
         mu = self.args.mu
         shape = x.shape
 
@@ -762,22 +793,20 @@ class CichyQuantized(MRCData):
         x = x.reshape(shape)
         digitized = digitized.reshape(shape)
 
-        x = np.append(x[:, :-1], digitized[:, 1:], axis=0)
+        x = np.append(digitized[:, :-1], digitized[:, 1:], axis=0)
         return x
 
     def encode(self, xtn, xv, xtt):
-        self.pca = PCA(self.args.whiten)
+        '''
+        Encode data using mu-law companding.
+        '''
+        xtn = np.clip(xtn, -self.args.num_clip, self.args.num_clip)
+
         self.maxabs = MaxAbsScaler()
 
-        xtn = self.pca.fit_transform(xtn.T)
-        xv = self.pca.transform(xv.T)
-        xtt = self.pca.transform(xtt.T)
-
-        xtn = self.clip(xtn.T).T
-
-        xtn = self.maxabs.fit_transform(xtn).T
-        xv = self.maxabs.transform(xv).T
-        xtt = self.maxabs.transform(xtt).T
+        xtn = self.maxabs.fit_transform(xtn.T).T
+        xv = self.maxabs.transform(xv.T).T
+        xtt = self.maxabs.transform(xtt.T).T
 
         xv = np.clip(xv, -1, 1)
         xtt = np.clip(xtt, -1, 1)
@@ -800,42 +829,27 @@ class CichyQuantized(MRCData):
         '''
 
     def get_batch(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
         num_chn = self.args.num_channels
-        sr = self.args.sample_rate
+        bs = self.bs[split]
 
         if i == 0:
             self.inds[split] = np.random.permutation(data.shape[0])
 
-            chn_ids = torch.multinomial(
-                self.chn_weights, data.shape[0], replacement=True)
-            chn_ids = chn_ids.reshape(-1, 1, 1)
-
-            chn_weights_sample = self.chn_weights[chn_ids].reshape(-1, 1, 1)
-
-            # reshape to concatenate with data
-            self.chn_ids[split] = torch.repeat_interleave(chn_ids, sr, dim=2)
-            self.chn_weights_sample[split] = torch.repeat_interleave(
-                chn_weights_sample, sr, dim=2)
-
         # sample random indices
-        inds = self.inds[split][:self.bs[split]]
+        inds = self.inds[split][:bs]
         data = data[inds]
 
         # remove the already sampled indices
-        self.inds[split] = self.inds[split][self.bs[split]:]
+        self.inds[split] = self.inds[split][bs:]
 
-        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id,
-        # 1 channel id, 1 channel weight
+        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
         data = {'inputs': data[:, :num_chn, :],
                 'targets': data[:, num_chn:num_chn*2, :].long(),
                 'condition': data[:, -2:-1, :].long(),
-                'sid': data[:, -1:, :].long(),
-                'chnid': self.chn_ids[split][:self.bs[split]],
-                'chn_weights': self.chn_weights_sample[split][:self.bs[split]]}
-
-        # remove the already sampled indices
-        self.chn_ids[split] = self.chn_ids[split][self.bs[split]:]
-        self.chn_weights_sample[split] = self.chn_weights_sample[split][self.bs[split]:]
+                'sid': data[:, -1:, :].long()}
 
         # return data and subject indices
         return data, data['sid']
@@ -858,12 +872,11 @@ class CichyQuantized(MRCData):
 
         super(CichyQuantized, self).set_common(args)
 
-        args.num_channels = args.whiten
+        self.x_train_t = self.x_train_t.long()
+        self.x_val_t = self.x_val_t.long()
+        self.x_test_t = self.x_test_t.long()
 
-        try:
-            self.chn_weights = torch.Tensor(self.chn_weights).float().cuda()
-        except Exception:
-            traceback.print_exc()
+        args.num_channels = int((args.num_channels-2)/2)
 
     def crop_trials(self, data, sampling):
         inds = np.arange(data.shape[0])[::sampling]
@@ -878,8 +891,6 @@ class CichyQuantized(MRCData):
 
         x = [x[:, :, ind:ind+sr] for ind in inds]
         x = np.concatenate(x)
-
-        #x = np.array(np.split(inds[1:]))
 
         return x
 
@@ -905,14 +916,8 @@ class CichyQuantized(MRCData):
         self.x_val_t = np.array(x_val_ts).transpose(1, 0, 2)
         self.x_test_t = np.array(x_test_ts).transpose(1, 0, 2)
 
-        path = os.path.join(args.load_data, 'pca_model')
-        self.pca = pickle.load(open(path, 'rb'))
-
         path = os.path.join(args.load_data, 'maxabs_scaler')
         self.maxabs = pickle.load(open(path, 'rb'))
-
-        self.chn_weights = torch.tensor(self.pca.explained_variance_ratio_)
-        #print(self.chn_weights)
 
     def save_data(self):
         '''
@@ -925,9 +930,6 @@ class CichyQuantized(MRCData):
 
             path = os.path.join(self.args.dump_data, 'ch' + str(i) + '.mat')
             savemat(path, dump)
-
-        path = os.path.join(self.args.dump_data, 'pca_model')
-        pickle.dump(self.pca, open(path, 'wb'))
 
         path = os.path.join(self.args.dump_data, 'maxabs_scaler')
         pickle.dump(self.maxabs, open(path, 'wb'))

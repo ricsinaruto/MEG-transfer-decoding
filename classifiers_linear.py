@@ -260,7 +260,7 @@ class LDA_average(LDA):
 
 
 class LDA_cov(LDA):
-    def prep_lda(self, data):
+    def prep_lda(self, data, metric=np.cov):
         '''
         Reshape data for LDA.
         '''
@@ -269,8 +269,24 @@ class LDA_cov(LDA):
 
         data_cov = []
         for i in range(data.shape[0]):
-            mat = np.triu(np.cov(data[i])).reshape(-1)
+            mat = np.triu(metric(data[i])).reshape(-1)
             data_cov.append(mat[mat != 0])
+
+        return np.array(data_cov)
+
+
+class LDA_corr(LDA_cov):
+    def prep_lda(self, data, metric=np.cov):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+
+        data_cov = []
+        for i in range(data.shape[0]):
+            mat = np.diag(metric(data[i])).reshape(-1)
+            data_cov.append(mat)
 
         return np.array(data_cov)
 

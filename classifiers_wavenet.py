@@ -1,8 +1,9 @@
+from cv2 import COVAR_SCALE
 import numpy as np
 import os
 import torch
 
-from torch.nn import Conv1d, Embedding, CrossEntropyLoss
+from torch.nn import Conv1d, Embedding, CrossEntropyLoss, Dropout, ReLU
 from scipy.io import loadmat
 
 from wavenets_simple import WavenetSimple, WavenetSimpleSTS, ConvPoolNet
@@ -441,11 +442,29 @@ class WavenetClassifierSemb(WavenetClassifier):
         super(WavenetClassifierSemb, self).loaded(args)
         self.set_sub_dict()
 
+        path = False
+
         # change embedding to an already trained one
         if 'trained_semb' in args.result_dir:
             path = os.path.join(args.load_model, '..', 'sub_emb.mat')
+            
+        if 'true_semb' in args.result_dir:
+            path = os.path.join(args.result_dir, '..', '..',
+                                'finetune_0', 'train1.0', 'sub_emb.mat')
+
+        if path:
             semb = torch.tensor(loadmat(path)['X']).cuda()
             self.wavenet.subject_emb.weight = torch.nn.Parameter(semb)
+
+        # freeze model parameters except subject embeddings
+        # if 'freeze' in result_dir
+        if 'freeze' in args.result_dir:
+            for name, param in self.named_parameters():
+                #print(name)
+                if 'subject_emb' not in name:
+                    param.requires_grad = False
+
+        self.criterion_class_nored = CrossEntropyLoss(reduction='none').cuda()
 
     def build_model(self, args):
         self.wavenet = args.wavenet_class(args)
@@ -498,7 +517,13 @@ class WavenetClassifierSemb(WavenetClassifier):
             outputs.append(out_class.detach())
 
         outputs = torch.stack(outputs)
+        # apply soft max to last dimension of outputs
+        outputs = torch.nn.functional.softmax(outputs, dim=-1)
+
+        # average over subject embeddings
         outputs = torch.mean(outputs, dim=0)
+
+        print(torch.argmax(outputs[0], dim=-1))
 
         return None, outputs
 
@@ -514,6 +539,54 @@ class WavenetClassifierSemb(WavenetClassifier):
                 return self.ensemble_forward(x, sid)
 
         return super(WavenetClassifierSemb, self).forward(x, sid)
+
+
+class WavenetClassifierSembCov(WavenetClassifierSemb):
+    def __init__(self, args):
+        super(WavenetClassifierSembCov, self).__init__(args)
+
+        # going from sid to correct subject number
+        self.inv_sub_dict = {v: k for k, v in self.sub_dict.items()}
+
+        covs = []
+        for i in range(15):
+            path = os.path.join(args.data_path, '..', 'cont',
+                                'subj{}_cov.npy'.format(i))
+            covs.append(torch.tensor(np.load(path)))
+
+        self.covs = torch.stack(covs).float().cuda()
+        self.covs = self.covs[:, ::20]
+
+        # permute according to inv_sub_dict
+        self.covs = self.covs[[self.inv_sub_dict[i] for i in range(15)]]
+
+        # linear layer going from covariance to lower dim embedding
+        self.sub_emb = torch.nn.Linear(self.covs.shape[1], args.embedding_dim)
+
+    def build_model(self, args):
+        self.wavenet = args.wavenet_class(args)
+
+        self.wavenet.inp_ch = args.num_channels + args.embedding_dim
+        self.wavenet.build_model(args)
+        
+        self.class_dim = self.wavenet.ch * int(args.sample_rate/args.rf)
+        self.classifier = ClassifierModule(args, self.class_dim)
+
+        self.cov_drop = Dropout(0.995)
+        self.cov_activation = ReLU()
+
+    def forward(self, x, sid=None):
+        # get subject-specific covariance
+        covs = self.covs[sid]
+
+        # project to embedding space
+        embs = self.sub_emb(covs)
+
+        # reshape to same shape as x and concatenate
+        embs = embs.repeat(x.shape[2], 1, 1).permute(1, 2, 0)
+        x = torch.cat([x, embs], dim=1)
+
+        return super(WavenetClassifierSembCov, self).forward(x, sid)
 
 
 class WavenetClassifierSembChet(WavenetClassifierSemb):
