@@ -4,8 +4,9 @@ import torch.nn.functional as F
 import numpy as np
 
 from classifiers_linear import LDA
+from classifiers_simpleNN import SimpleClassFakeLoss, SimpleClassAutoregcheck
 from wavenets_simple import WavenetSimple
-from wavenets_full import WavenetFull
+from wavenets_full import WavenetFull, WavenetFullEmbPca
 from classifiers_wavenet import WavenetClassifier, WavenetContClass
 from cichy_data import CichyData, CichyContData, CichyQuantized
 
@@ -19,22 +20,26 @@ class Args:
 
         # experiment arguments
         self.name = 'args.py'  # name of this file, don't change
+        self.fix_seed = True
         self.common_dataset = False
         self.load_dataset = True  # whether to load self.dataset
-        self.learning_rate = 0.0001  # learning rate for Adam
-        self.max_trials = 0.002  # ratio of training data (1=max)
-        self.batch_size = 20  # batch size for training and validation data
-        self.epochs = 5000  # number of loops over training data
+        self.learning_rate = 0.0003  # learning rate for Adam
+        self.max_trials = 1.0  # ratio of training data (1=max)
+        self.val_max_trials = False
+        self.batch_size = 5  # batch size for training and validation data
+        self.epochs = 1000  # number of loops over training data
         self.val_freq = 20  # how often to validate (in epochs)
         self.print_freq = 5  # how often to print metrics (in epochs)
+        self.anneal_lr = False  # whether to anneal learning rate
         self.save_curves = True  # whether to save loss curves to file
         self.load_model = False
         self.result_dir = [os.path.join(  # path(s) to save model and others
             'results',
             'cichy_epoched',
             'subj1',
-            'cont_quantized_7examples')]
-        self.model = WavenetFull  # class of model to use
+            'cont_quantized',
+            'dumb_conv')]
+        self.model = SimpleClassAutoregcheck  # class of model to use
         self.dataset = CichyQuantized  # dataset class for loading and handling data
 
         # wavenet arguments
@@ -46,7 +51,7 @@ class Args:
         self.kernel_size = 2  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
         self.sample_rate = [0, 512]  # start and end of timesteps within trials
-        self.rf = 256  # receptive field of wavenet
+        self.rf = 256  # receptive field of wavenet, 2*rf - 1
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
@@ -65,18 +70,18 @@ class Args:
         self.alpha_norm = 0.0  # regularization multiplier on weights
         self.num_classes = 119  # number of classes for classification
         self.units = [800, 300]  # hidden layer sizes of fully-connected block
-        self.dim_red = 80  # number of pca components for channel reduction
+        self.dim_red = 300  # number of pca components for channel reduction
         self.stft_freq = 0  # STFT frequency index for LDA_wavelet_freq model
         self.decode_peak = 0.1
 
         # quantized wavenet arguments
         self.mu = 255
-        self.residual_channels = 1024
-        self.dilation_channels = 1024
-        self.skip_channels = 1024
+        self.residual_channels = 800
+        self.dilation_channels = 800
+        self.skip_channels = 3000
         self.channel_emb = 30
-        self.class_emb = 10
-        self.quant_emb = 10
+        self.class_emb = 2
+        self.quant_emb = 2
         self.cond_channels = self.class_emb
         self.head_channels = int(self.skip_channels/2)
         self.conv_bias = False
@@ -94,8 +99,8 @@ class Args:
         self.sr_data = 250  # sampling rate used for downsampling
         self.save_data = True  # whether to save the created data
         self.subjects_data = False  # list of subject inds to use in group data
-        self.num_clip = 8
-        self.dump_data = [os.path.join(data_path, 'cont_quantized')]  # path(s) for dumping data
+        self.num_clip = 4
+        self.dump_data = [os.path.join(data_path, 'cont_quantized_clamp4')]  # path(s) for dumping data
         self.load_data = self.dump_data  # path(s) for loading data files
 
         # analysis arguments

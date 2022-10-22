@@ -1,5 +1,5 @@
 from torch.nn import Sequential, Conv1d, Module, CrossEntropyLoss, Embedding
-from torch.nn import Softmax
+from torch.nn import Softmax, Linear
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -7,7 +7,16 @@ import numpy as np
 import os
 
 from wavenets_simple import WavenetSimple
-from classifiers_simpleNN import accuracy
+from cichy_data import mulaw_inv
+
+
+def accuracy(out_class, y):
+    '''
+    Compute accuracy based on output and target classes.
+    '''
+    classes = torch.argmax(out_class, dim=-1)
+    accuracy = torch.eq(classes, y)
+    return accuracy, classes
 
 
 def wave_init_weights(m):
@@ -170,21 +179,25 @@ class WaveNetLogitsHead(Module):
 
 class WavenetFull(WavenetSimple):
     '''
-    The full wavenet model as described in the original paper,
-    but without quantization.
+    The full wavenet model as described in the original paper
     '''
     def __init__(self, args):
         super(WavenetFull, self).__init__(args)
         self.criterion = CrossEntropyLoss(reduction='none').cuda()
 
+    def loaded(self, args):
+        super().loaded(args)
+        self.losses = []
+
     def build_model(self, args):
         self.quant_levels = args.mu + 1
-        shift = args.sample_rate - args.rf
+        shift = args.sample_rate - args.rf + 1
 
         # embeddings for various conditioning
         self.subject_emb = Embedding(args.subjects, args.embedding_dim)
         self.cond_emb = Embedding(args.num_classes, args.class_emb)
         self.quant_emb = Embedding(self.quant_levels, args.quant_emb)
+        self.inv_qemb = Linear(args.quant_emb, self.quant_levels, bias=False)
 
         self.softmax = Softmax(dim=-1)
 
@@ -196,7 +209,7 @@ class WavenetFull(WavenetSimple):
                 shift=shift,
                 kernel_size=1,
                 dilation=1,
-                in_channels=args.dim_red,
+                in_channels=args.dim_red*args.quant_emb,
                 residual_channels=args.residual_channels,
                 dilation_channels=args.dilation_channels,
                 skip_channels=args.skip_channels,
@@ -253,7 +266,7 @@ class WavenetFull(WavenetSimple):
         cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
 
         # set elements of cond to 0 where cond_ind is 0
-        cond = cond * (cond_ind != 0).float()
+        cond = cond * (cond_ind > 0).float()
 
         # apply embedding to inputs and squeeze embeddings to last dim
         x = self.quant_emb(x)
@@ -279,7 +292,8 @@ class WavenetFull(WavenetSimple):
         out = out.permute(0, 1, 3, 2)
 
         # apply transposed embedding to outputs
-        out = out @ self.quant_emb.weight.T
+        #out = out @ self.quant_emb.weight.T
+        out = self.inv_qemb(out)
 
         return out
 
@@ -288,22 +302,36 @@ class WavenetFull(WavenetSimple):
 
         # have to make sure this exactly matches the inteded targets
         targets = data['targets']
-        targets = targets[:, :, -logits.shape[1]:]
+        targets = targets[:, :, -logits.shape[-2]:]
 
+        shape = targets.shape
         targets = targets.reshape(-1)
         logits = logits.reshape(-1, logits.shape[-1])
 
         loss = self.criterion(logits, targets)
         loss = torch.mean(loss)
 
-        acc = torch.mean(accuracy(logits, targets).float())
+        acc, preds = accuracy(logits, targets)
+        acc = torch.mean(acc.float())
+
+        '''
+        pred_cont = mulaw_inv(preds)
+        target_cont = mulaw_inv(targets)
+
+        # compute MSE
+        mse = self.mse_loss(pred_cont, target_cont)
+        '''
+        mse = acc
 
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss,
                   'valloss/Validation accuracy: ': acc,
-                  'trainloss/Train accuracy: ': acc}
+                  'trainloss/Train accuracy: ': acc,
+                  'trainloss/Training MSE: ': mse,
+                  'valloss/Validation MSE: ': mse}
 
+        #return losses, pred_cont.reshape(shape), target_cont.reshape(shape)
         return losses, None, None
 
     def compute_log_pxy(self, data, tau=1.0):
@@ -361,6 +389,67 @@ class WavenetFull(WavenetSimple):
         log_px = torch.logsumexp(log_pxys, -1)
         py_x = torch.exp(log_pxys - log_px.unsqueeze(-1))
         return py_x, data['targets']
+
+
+class WavenetFullEmbPca(WavenetFull):
+    '''
+    Same as WavenetFull, except the pca_w is not shared across the
+    embedding dimension.
+    '''
+    def build_model(self, args):
+        super().build_model(args)
+
+        in_channels = args.num_channels * args.quant_emb
+        out_channels = args.dim_red * args.quant_emb
+        self.pca_w = Conv1d(
+            in_channels, out_channels, kernel_size=1, groups=args.quant_emb)
+
+    def forward(self, data, causal_pad=False):
+        """Computes logits and encoding results from observations.
+        Args:
+            x: (B,T) or (B,Q,T) tensor containing observations
+            c: optional conditioning Tensor. (B,C,1) for global conditions,
+                (B,C,T) for local conditions. None if unused
+            causal_pad: Whether or not to perform causal padding.
+        Returns:
+            logits: (B,Q,T) tensor of logits. Note that the t-th temporal output
+                represents the distribution over t+1.
+            encoded: same as `.encode`.
+        """
+        x = data['inputs']
+
+        # cond: B x E x T
+        cond_ind = data['condition']
+        cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
+
+        # set elements of cond to 0 where cond_ind is 0
+        cond = cond * (cond_ind > 0).float()
+
+        # apply embedding to inputs and squeeze embeddings to last dim
+        x = self.quant_emb(x)
+        timesteps = x.shape[-2]
+        x = x.permute(0, 3, 1, 2)  # B x E x C x T
+        x = x.reshape(x.shape[0], -1, timesteps)  # B x (C*E) x T
+        
+        # apply pca separately along embedding dimension
+        x = self.pca_w(x)
+
+        skips = []
+        for layer in self.layers:
+            x, skip = layer(x, c=cond, causal_pad=causal_pad)
+            skips.append(skip)
+
+        out = self.logits(x, skips)
+
+        # reshape to get (B, C, Q, T) -> (B, C, T, Q)
+        out = out.reshape(
+            out.shape[0], self.args.num_channels, -1, out.shape[-1])
+        out = out.permute(0, 1, 3, 2)
+
+        # apply transposed embedding to outputs
+        out = self.inv_qemb(out)
+
+        return out
 
 
 class WavenetFullSimple(WavenetSimple):

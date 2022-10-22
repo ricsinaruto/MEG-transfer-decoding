@@ -8,6 +8,9 @@ from scipy.io import savemat
 from torch.nn import Linear, Sequential, Module, Dropout, Conv1d
 from torch.nn import CrossEntropyLoss, Embedding
 
+from wavenets_full import WavenetFull
+from cichy_data import mulaw_inv
+
 
 def accuracy(out_class, y):
     '''
@@ -183,6 +186,159 @@ class SimpleClassifier(Module):
         self.losses[tr] = np.concatenate((self.losses[tr], loss))
         self.inputs.append(inputs.cpu().numpy())
         self.targets.append(targets.cpu().numpy())
+
+
+class SimpleClassPred(WavenetFull):
+    def build_model(self, args):
+        self.quant_levels = args.mu + 1
+        inp_ch = args.num_channels * args.quant_emb
+        out_ch = args.num_channels * args.quant_emb
+        
+        self.conv = Conv1d(inp_ch,
+                           out_ch,
+                           kernel_size=args.rf,
+                           bias=False,
+                           groups=args.num_channels)
+
+        self.activation = args.activation
+
+        self.quant_emb = Embedding(self.quant_levels, args.quant_emb)
+        self.inv_qemb = Linear(args.quant_emb, self.quant_levels, bias=False)
+
+        self.mse_loss = torch.nn.MSELoss()
+
+    def forward(self, data, causal_pad=False):
+        """Computes logits and encoding results from observations.
+        Args:
+            x: (B,T) or (B,Q,T) tensor containing observations
+            c: optional conditioning Tensor. (B,C,1) for global conditions,
+                (B,C,T) for local conditions. None if unused
+            causal_pad: Whether or not to perform causal padding.
+        Returns:
+            logits: (B,Q,T) tensor of logits. Note that the t-th temporal output
+                represents the distribution over t+1.
+            encoded: same as `.encode`.
+        """
+        x = data['inputs']
+
+        '''
+        Initially train without condition to be able to compare later.
+        '''
+        # cond: B x E x T
+        #cond_ind = data['condition']
+        #cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
+
+        # set elements of cond to 0 where cond_ind is 0
+        #cond = cond * (cond_ind > 0).float()
+
+        # concatenate cond to x
+        #x = torch.cat((x, cond), dim=1)
+
+        # apply quantization embedding to x
+        x = x @ self.quant_emb.weight
+        timesteps = x.shape[-2]
+
+        # B x C*Q x T
+        x = x.permute(0, 1, 3, 2)
+        x = x.reshape(x.shape[0], -1, timesteps)
+
+        x = self.conv(x)
+        x = self.activation(x)
+
+        # B x C x T x Q
+        x = x.reshape(x.shape[0], -1, self.args.quant_emb, x.shape[-1])
+        x = x.permute(0, 1, 3, 2)
+
+        x = self.inv_qemb(x)
+
+        return x
+
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        losses, pred_cont, target_cont = super().loss(data, i, sid, train, criterion)
+
+        '''
+        if i == 0 and train:
+            pred_cont = pred_cont.detach().cpu().numpy()
+            target_cont = target_cont.detach().cpu().numpy()
+
+            # save predictions and targets
+            path = os.path.join(self.args.result_dir, 'preds.npy')
+            np.save(path, pred_cont)
+            path = os.path.join(self.args.result_dir, 'targets.npy')
+            np.save(path, target_cont)
+        '''
+        '''
+        if i == 0 and train:
+            inputs = data['inputs'].detach().cpu().numpy()
+            targets = data['targets'].detach().cpu().numpy()
+
+            # save predictions and targets
+            path = os.path.join(self.args.result_dir, 'inputs.npy')
+            np.save(path, inputs)
+            path = os.path.join(self.args.result_dir, 'targets_full.npy')
+            np.save(path, targets)
+        '''
+
+        return losses, None, None
+
+
+class SimpleClassFakeLoss(SimpleClassPred):
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        data['inputs'] = torch.ones_like(data['inputs'],
+                                         dtype=torch.float32,
+                                         requires_grad=True)
+        # expand inputs with an extra dimension of size quant_levels
+        data['inputs'] = data['inputs'].unsqueeze(-1)
+        data['inputs'] = data['inputs'].repeat(1, 1, 1, self.quant_levels)
+        data['inputs'].retain_grad()
+        logits = self.forward(data)
+
+        # have to make sure this exactly matches the inteded targets
+        targets = data['targets']
+        targets = targets[:, :, -logits.shape[-2]:]
+
+        shape = targets.shape
+        targets = targets.reshape(-1)
+
+        loss = torch.sum(logits[0])
+
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss}
+
+        return losses, None, None
+
+
+class SimpleClassAutoregcheck(SimpleClassPred):
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        data['inputs'] = torch.ones_like(data['inputs'],
+                                         dtype=torch.float32,
+                                         requires_grad=True)
+        # expand inputs with an extra dimension of size quant_levels
+        data['inputs'] = data['inputs'].unsqueeze(-1)
+        data['inputs'] = data['inputs'].repeat(1, 1, 1, self.quant_levels)
+        data['inputs'].retain_grad()
+        logits = self.forward(data)
+
+        # have to make sure this exactly matches the inteded targets
+        targets = data['targets']
+        targets = targets[:, :, -logits.shape[-2]:]
+        logits = logits[:, :, -1, :]
+        targets = targets[:, :, -1]
+        
+
+        shape = targets.shape
+        targets = targets.reshape(-1)
+        logits = logits.reshape(-1, logits.shape[-1])
+
+        loss = self.criterion(logits, targets)
+        loss = torch.mean(loss)
+
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss}
+
+        return losses, None, None
 
 
 class SimpleClassifierPosEncoding(SimpleClassifier):

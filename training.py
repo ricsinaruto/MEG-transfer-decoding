@@ -32,6 +32,11 @@ class Experiment:
         self.val_losses = []
         self.train_losses = []
 
+        if args.fix_seed:
+            torch.manual_seed(42)
+            np.random.seed(42)
+            random.seed(42)
+
         # create folder for results
         if os.path.isdir(self.args.result_dir):
             print('Result directory already exists, writing to it.',
@@ -99,6 +104,11 @@ class Experiment:
                          lr=self.args.learning_rate,
                          weight_decay=self.args.alpha_norm)
 
+        # use cosine annealing
+        if self.args.anneal_lr:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=self.dataset.train_batches)
+
         # start with a pass over the validation set
         best_val = 1000000
         self.evaluate()
@@ -131,6 +141,9 @@ class Experiment:
                 optimizer.step()
                 optimizer.zero_grad()
                 losses = self.loss.append(losses)
+
+                if self.args.anneal_lr:
+                    scheduler.step()
 
             # print training losses
             if not epoch % self.args.print_freq:
@@ -219,6 +232,13 @@ class Experiment:
 
             #outputs.append(output)
             #targets.append(target)
+
+        # concatenate self.model.losses
+        #loss = torch.concat((self.model.losses), dim=0).numpy()
+
+        # save self.model.losses to file
+        #path = os.path.join(self.args.result_dir, 'losses.npy')
+        #np.save(path, loss)
 
         losses = self.loss.print('valloss')
         #return losses, torch.cat(outputs), torch.cat(targets)

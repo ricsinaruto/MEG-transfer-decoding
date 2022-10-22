@@ -3,6 +3,7 @@ import torch
 import random
 import pickle
 import mne
+import math
 import traceback
 import numpy as np
 
@@ -11,6 +12,20 @@ from sklearn.preprocessing import StandardScaler, RobustScaler, MaxAbsScaler
 from sklearn.decomposition import PCA
 
 from mrc_data import MRCData
+
+
+def mulaw_inv(x, mu=255):
+    '''
+    Inverse mu-law companding.
+    '''
+    shape = x.shape
+
+    x = x.reshape(-1)
+    x = (x - 0.5) / mu * 2 - 1
+    x = torch.sign(x)*((1+mu)**torch.abs(x)-1)/mu
+
+    x = x.reshape(shape)
+    return x
 
 
 class CichyData(MRCData):
@@ -64,6 +79,25 @@ class CichyData(MRCData):
         else:
             self.x_test_t = np.concatenate(tuple(x_test_ts), axis=1)
 
+    def trial_subset(self, data, args):
+        '''
+        Selects a subset of trials from the data.
+        '''
+        num_ch = len(args.num_channels) - 1
+        # select a subset of training trials
+        num_trials = np.sum(data[:, num_ch, 0] == 0.0)
+        max_trials = int(args.max_trials * num_trials)
+        trials = [0] * args.num_classes
+
+        inds = []
+        for i in range(data.shape[0]):
+            cond = int(data[i, num_ch, 0])
+            if trials[cond] < max_trials:
+                trials[cond] += 1
+                inds.append(i)
+
+        return inds
+
     def set_common(self, args):
         if not isinstance(args.num_channels, list):
             args.num_channels = list(range(args.num_channels+1))
@@ -85,19 +119,13 @@ class CichyData(MRCData):
 
         args.sample_rate = tmax - tmin
 
-        # select a subset of training trials
-        num_trials = np.sum(self.x_train_t[:, num_ch, 0] == 0.0)
-        max_trials = int(args.max_trials * num_trials)
-        trials = [0] * args.num_classes
-
-        inds = []
-        for i in range(self.x_train_t.shape[0]):
-            cond = int(self.x_train_t[i, num_ch, 0])
-            if trials[cond] < max_trials:
-                trials[cond] += 1
-                inds.append(i)
-
+        inds = self.trial_subset(self.x_train_t, args)
         self.x_train_t = self.x_train_t[inds, :, :]
+
+        if args.val_max_trials:
+            inds = self.trial_subset(self.x_val_t, args)
+            self.x_val_t = self.x_val_t[inds, :, :]
+            self.x_test_t = self.x_test_t[inds, :, :]
 
         # whiten data if needed
         if args.group_whiten:
@@ -814,29 +842,27 @@ class CichyQuantized(MRCData):
         return self.mulaw(xtn), self.mulaw(xv), self.mulaw(xtt)
 
     def decode(self, x):
-        pass
         '''
-
-        x = x / (mu + 1) * 2 - 1
-        x = np.sign(x)*((mu+1)**np.abs(x)-1) / mu
-
-        x = x.reshape(shape)
-        x = maxabs.inverse_transform(x.T)
-        x = pca.inverse_transform(x)
-        x = robust.inverse_transform(x)
-
-        return x.T
+        Decode data by applying the inverse of mulaw and encoding functions.
         '''
+        x = mulaw_inv(x)
+        x = self.maxabs.inverse_transform(x.T).T
+
+        return x
 
     def get_batch(self, i, data, split):
         '''
         Get batch of data.
         '''
         num_chn = self.args.num_channels
-        bs = self.bs[split]
 
         if i == 0:
             self.inds[split] = np.random.permutation(data.shape[0])
+
+        if len(self.inds[split]) > self.bs[split]:
+            bs = self.bs[split]
+        else:
+            bs = len(self.inds[split])
 
         # sample random indices
         inds = self.inds[split][:bs]
@@ -847,9 +873,9 @@ class CichyQuantized(MRCData):
 
         # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
         data = {'inputs': data[:, :num_chn, :],
-                'targets': data[:, num_chn:num_chn*2, :].long(),
-                'condition': data[:, -2:-1, :].long(),
-                'sid': data[:, -1:, :].long()}
+                'targets': data[:, num_chn:num_chn*2, :],
+                'condition': data[:, -2:-1, :],
+                'sid': data[:, -1:, :]}
 
         # return data and subject indices
         return data, data['sid']
@@ -870,11 +896,24 @@ class CichyQuantized(MRCData):
         self.x_val_t = self.crop_trials(self.x_val_t, sampling)
         self.x_test_t = self.crop_trials(self.x_test_t, sampling)
 
-        super(CichyQuantized, self).set_common(args)
+        self.args.num_channels = len(self.args.num_channels)
 
-        self.x_train_t = self.x_train_t.long()
-        self.x_val_t = self.x_val_t.long()
-        self.x_test_t = self.x_test_t.long()
+        self.x_train_t = torch.Tensor(self.x_train_t).long().cuda()
+        self.x_val_t = torch.Tensor(self.x_val_t).long().cuda()
+        self.x_test_t = torch.Tensor(self.x_test_t).long().cuda()
+        print('Data loaded on gpu.')
+
+        bs = args.batch_size
+        self.bs = {'train': bs, 'val': bs, 'test': bs}
+
+        self.train_batches = math.ceil(
+            self.x_train_t.shape[0] / self.bs['train']) 
+        self.val_batches = math.ceil(self.x_val_t.shape[0] / self.bs['val'])
+        self.test_batches = math.ceil(self.x_test_t.shape[0] / self.bs['test'])
+
+        print('Train batches: ', self.train_batches)
+        print('Validation batches: ', self.val_batches)
+        print('Test batches: ', self.test_batches)
 
         args.num_channels = int((args.num_channels-2)/2)
 
