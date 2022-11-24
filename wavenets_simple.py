@@ -737,6 +737,24 @@ class WavenetSimple(Module):
         '''
 
 
+class ConvAR(WavenetSimple):
+    def build_model(self, args):
+        ch = args.num_channels
+        self.conv = Conv1d(
+            ch, ch, kernel_size=args.rf, groups=args.groups)
+
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        preds = self.conv(data['inputs'])
+
+        loss = self.criterion(preds, data['targets'][:, :, -preds.shape[2]:])
+
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss}
+
+        return losses
+
+
 class WavenetSimpleUniToMulti(WavenetSimple):
     '''
     Initialize weights of multivariate model with univariate model,

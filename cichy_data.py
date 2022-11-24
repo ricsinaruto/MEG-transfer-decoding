@@ -7,6 +7,7 @@ import math
 import traceback
 import numpy as np
 
+from scipy.ndimage import gaussian_filter1d
 from scipy.io import loadmat, savemat
 from sklearn.preprocessing import StandardScaler, RobustScaler, MaxAbsScaler
 from sklearn.decomposition import PCA
@@ -679,22 +680,27 @@ class CichyQuantized(MRCData):
         x_trains, x_vals, x_tests = self.load_data(args)
 
         # this is the continuous data for AR models
-        x_trains = np.concatenate(tuple(x_trains), axis=1)
-        x_vals = np.concatenate(tuple(x_vals), axis=1)
-        x_tests = np.concatenate(tuple(x_tests), axis=1)
+        self.x_train = np.concatenate(tuple(x_trains), axis=1)
+        self.x_val = np.concatenate(tuple(x_vals), axis=1)
+        self.x_test = np.concatenate(tuple(x_tests), axis=1)
 
-        xtn, xv, xtt = self.encode(x_trains[:-2], x_vals[:-2], x_tests[:-2])
+        if not args.bypass:
+            xtn, xv, xtt = self.encode(self.x_train[:-2],
+                                    self.x_val[:-2],
+                                    self.x_test[:-2])
 
-        # append back labels and sid
-        self.x_train_t = np.append(xtn, x_trains[-2:, :-1], axis=0)
-        self.x_val_t = np.append(xv, x_vals[-2:, :-1], axis=0)
-        self.x_test_t = np.append(xtt, x_tests[-2:, :-1], axis=0)
+            # append back labels and sid
+            self.x_train_t = np.append(xtn, self.x_train[-2:, :-1], axis=0)
+            self.x_val_t = np.append(xv, self.x_val[-2:, :-1], axis=0)
+            self.x_test_t = np.append(xtt, self.x_test[-2:, :-1], axis=0)
 
-        if not os.path.isdir(args.dump_data):
-            os.mkdir(args.dump_data)
+            if not os.path.isdir(args.dump_data):
+                os.mkdir(args.dump_data)
 
-        self.save_data()
-        self.set_common(args)
+            self.save_data()
+            self.set_common(args)
+        else:
+            args.num_channels = len(args.num_channels)
 
     def load_data(self, args):
         '''
@@ -721,7 +727,7 @@ class CichyQuantized(MRCData):
 
             # will have to be changed to handle concatenated subjects
             # load event timings for continuous data
-            ev_path = os.path.join(args.data_path, 'event_times.npy')
+            ev_path = os.path.join(os.path.dirname(path), 'event_times.npy')
             event_times = np.load(ev_path)
             event_times = [(int(ev[0]/resample), ev[2]) for ev in event_times]
 
@@ -866,11 +872,15 @@ class CichyQuantized(MRCData):
 
         # sample random indices
         inds = self.inds[split][:bs]
-        data = data[inds]
+
+        if data.is_cuda:
+            data = data[inds]
+        else:
+            data = data[inds].cuda()
 
         # remove the already sampled indices
         self.inds[split] = self.inds[split][bs:]
-
+        
         # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
         data = {'inputs': data[:, :num_chn, :],
                 'targets': data[:, num_chn:num_chn*2, :],
@@ -885,6 +895,9 @@ class CichyQuantized(MRCData):
             w = self.args.sample_rate[1] - self.args.sample_rate[0]
             self.args.sample_rate = w
 
+        args.num_channels = len(args.num_channels)
+        args.num_channels = int((args.num_channels-2)/2)
+
         # transform to examples
         self.x_train_t = self.create_examples(self.x_train_t)
         self.x_val_t = self.create_examples(self.x_val_t)
@@ -896,12 +909,16 @@ class CichyQuantized(MRCData):
         self.x_val_t = self.crop_trials(self.x_val_t, sampling)
         self.x_test_t = self.crop_trials(self.x_test_t, sampling)
 
-        self.args.num_channels = len(self.args.num_channels)
-
-        self.x_train_t = torch.Tensor(self.x_train_t).long().cuda()
-        self.x_val_t = torch.Tensor(self.x_val_t).long().cuda()
-        self.x_test_t = torch.Tensor(self.x_test_t).long().cuda()
-        print('Data loaded on gpu.')
+        try:
+            self.x_train_t = torch.Tensor(self.x_train_t).long().cuda()
+            self.x_val_t = torch.Tensor(self.x_val_t).long().cuda()
+            self.x_test_t = torch.Tensor(self.x_test_t).long().cuda()
+            print('Data loaded on gpu.')
+        except RuntimeError:
+            self.x_train_t = torch.Tensor(self.x_train_t).long()
+            self.x_val_t = torch.Tensor(self.x_val_t).long()
+            self.x_test_t = torch.Tensor(self.x_test_t).long()
+            print('Data loaded on cpu.')
 
         bs = args.batch_size
         self.bs = {'train': bs, 'val': bs, 'test': bs}
@@ -914,8 +931,6 @@ class CichyQuantized(MRCData):
         print('Train batches: ', self.train_batches)
         print('Validation batches: ', self.val_batches)
         print('Test batches: ', self.test_batches)
-
-        args.num_channels = int((args.num_channels-2)/2)
 
     def crop_trials(self, data, sampling):
         inds = np.arange(data.shape[0])[::sampling]
@@ -972,6 +987,284 @@ class CichyQuantized(MRCData):
 
         path = os.path.join(self.args.dump_data, 'maxabs_scaler')
         pickle.dump(self.maxabs, open(path, 'wb'))
+
+
+class CichyQuantizedBatched(CichyQuantized):
+    def __init__(self, args):
+        '''
+        Load data and apply pca, then create batches.
+        '''
+        self.args = args
+        self.inds = {'train': [], 'val': [], 'test': []}
+        self.sub_id = {'train': [0], 'val': [0], 'test': [0]}
+        self.chn_weights_sample = {}
+        self.chn_ids = {}
+
+        if isinstance(self.args.sample_rate, list):
+            w = self.args.sample_rate[1] - self.args.sample_rate[0]
+            self.args.sample_rate = w
+
+        # load data created by CichyQuantized and save individual examples
+        if args.load_data != args.dump_data:
+            super().load_mat_data(args)
+
+            args.num_channels = len(args.num_channels)
+            args.num_channels = int((args.num_channels-2)/2)
+
+            # transform to examples
+            self.x_train_t = self.create_examples(self.x_train_t)
+            self.x_val_t = self.create_examples(self.x_val_t)
+            self.x_test_t = self.create_examples(self.x_test_t)
+
+            # save examples
+            self.save_data()
+
+            return
+
+        self.set_common(args)
+
+        # dummy data
+        self.x_train_t = None
+        self.x_val_t = None
+        self.x_test_t = None
+
+    def get_batch(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
+        num_chn = self.args.num_channels
+
+        if i == 0:
+            self.inds[split] = np.random.permutation(self.ex[split])
+
+        if len(self.inds[split]) > self.bs[split]:
+            bs = self.bs[split]
+        else:
+            bs = len(self.inds[split])
+
+        # sample random indices
+        inds = self.inds[split][:bs]
+
+        # read examples from disk according to correct split
+        # parallelize the for loop to increase speed
+        data = []
+        for j in inds:
+            path = os.path.join(self.args.load_data, split + str(j) + '.npy')
+            data.append(torch.Tensor(np.load(path)).long())
+        
+        # stack individual examples to form a batch
+        data = torch.stack(data)
+        data = data.cuda()
+
+        # remove the already sampled indices
+        self.inds[split] = self.inds[split][bs:]
+        
+        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
+        data = {'inputs': data[:, :num_chn, :],
+                'targets': data[:, num_chn:num_chn*2, :],
+                'condition': data[:, -2:-1, :],
+                'sid': data[:, -1:, :]}
+
+        # return data and subject indices
+        return data, data['sid']
+
+    def set_examples(self, split):
+        path = self.args.dump_data
+        exs = [name for name in os.listdir(path) if split in name]
+        self.ex[split] = len(exs)
+
+    def set_common(self, args=None):
+        if isinstance(self.args.sample_rate, list):
+            w = self.args.sample_rate[1] - self.args.sample_rate[0]
+            self.args.sample_rate = w
+
+        args.num_channels = len(args.num_channels)
+        args.num_channels = int((args.num_channels-2)/2)
+
+        bs = args.batch_size
+        self.bs = {'train': bs, 'val': bs, 'test': bs}
+
+        # count files with train in their name in args.dump_data
+        self.ex = {}
+        self.set_examples('train')
+        self.set_examples('val')
+        self.set_examples('test')
+
+        self.train_batches = math.ceil(self.ex['train'] / self.bs['train'])
+        self.val_batches = math.ceil(self.ex['val'] / self.bs['val'])
+        self.test_batches = math.ceil(self.ex['test'] / self.bs['test'])
+
+        print('Train batches: ', self.train_batches)
+        print('Validation batches: ', self.val_batches)
+        print('Test batches: ', self.test_batches)
+
+    def save_data(self):
+        '''
+        Save each example from self.x separately to disk
+        '''
+
+        # check if dump_data directory exists
+        if not os.path.exists(self.args.dump_data):
+            os.makedirs(self.args.dump_data)
+
+        # save train data as numpy arrays
+        for i in range(self.x_train_t.shape[0]):
+            path = os.path.join(self.args.dump_data, 'train' + str(i))
+            np.save(path, self.x_train_t[i])
+
+        # save validation data as numpy arrays
+        for i in range(self.x_val_t.shape[0]):
+            path = os.path.join(self.args.dump_data, 'val' + str(i))
+            np.save(path, self.x_val_t[i])
+
+        # save test data as numpy arrays
+        for i in range(self.x_test_t.shape[0]):
+            path = os.path.join(self.args.dump_data, 'test' + str(i))
+            np.save(path, self.x_test_t[i])
+
+    def load_mat_data(self, args):
+        '''
+        Loads ready-to-train splits from mat files.
+        '''
+        pass
+
+
+class CichyQuantizedAR(CichyQuantized):
+    def save_data(self):
+        '''
+        Save final data to disk for easier loading next time.
+        '''
+        for i in range(self.x_train.shape[0]):
+            dump = {'x_train_t': self.x_train[i:i+1:, :],
+                    'x_val_t': self.x_val[i:i+1, :],
+                    'x_test_t': self.x_test[i:i+1, :]}
+
+            path = os.path.join(self.args.dump_data, 'ch' + str(i) + '.mat')
+            savemat(path, dump)
+
+        path = os.path.join(self.args.dump_data, 'maxabs_scaler')
+        pickle.dump(self.maxabs, open(path, 'wb'))
+
+    def set_common(self, args=None):
+        if isinstance(self.args.sample_rate, list):
+            w = self.args.sample_rate[1] - self.args.sample_rate[0]
+            self.args.sample_rate = w
+
+        args.num_channels = len(args.num_channels) - 1
+
+        # transform to examples
+        self.x_train_t = self.create_examples(self.x_train_t)
+        self.x_val_t = self.create_examples(self.x_val_t)
+        self.x_test_t = self.create_examples(self.x_test_t)
+
+        try:
+            self.x_train_t = torch.Tensor(self.x_train_t).cuda()
+            self.x_val_t = torch.Tensor(self.x_val_t).cuda()
+            self.x_test_t = torch.Tensor(self.x_test_t).cuda()
+            print('Data loaded on gpu.')
+        except RuntimeError:
+            self.x_train_t = torch.Tensor(self.x_train_t)
+            self.x_val_t = torch.Tensor(self.x_val_t)
+            self.x_test_t = torch.Tensor(self.x_test_t)
+            print('Data loaded on cpu.')
+
+        bs = args.batch_size
+        self.bs = {'train': bs, 'val': bs, 'test': bs}
+
+        self.train_batches = math.ceil(
+            self.x_train_t.shape[0] / self.bs['train']) 
+        self.val_batches = math.ceil(self.x_val_t.shape[0] / self.bs['val'])
+        self.test_batches = math.ceil(self.x_test_t.shape[0] / self.bs['test'])
+
+        print('Train batches: ', self.train_batches)
+        print('Validation batches: ', self.val_batches)
+        print('Test batches: ', self.test_batches)
+
+    def get_batch(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
+        num_chn = self.args.num_channels
+
+        if i == 0:
+            self.inds[split] = np.random.permutation(data.shape[0])
+
+        if len(self.inds[split]) > self.bs[split]:
+            bs = self.bs[split]
+        else:
+            bs = len(self.inds[split])
+
+        # sample random indices
+        inds = self.inds[split][:bs]
+
+        if data.is_cuda:
+            data = data[inds]
+        else:
+            data = data[inds].cuda()
+
+        # remove the already sampled indices
+        self.inds[split] = self.inds[split][bs:]
+        
+        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
+        data = {'inputs': data[:, :, :-1],
+                'targets': data[:, :, 1:]}
+
+        # return data and subject indices
+        return data, data['sid']
+
+
+class CichyQuantizedGauss(CichyQuantized):
+    def get_batch(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
+        data, sid = super().get_batch(i, data, split)
+
+        data['gauss'] = self.gauss_targets
+
+        return data, sid
+
+    def gauss_filter(self, x):
+        '''
+        Gaussian filter for the continuous data.
+        '''
+        nc = self.args.num_channels
+        targets = x[:, nc:2*nc, :]
+        targets = torch.nn.functional.one_hot(targets)
+
+        targets = targets.float().cpu().numpy()
+        targets = gaussian_filter1d(targets, sigma=2)
+
+        return targets
+
+    def set_common(self, args):
+        super().set_common(args)
+
+        # create a tensor of one-hot gauss targets
+        self.gauss_targets = gaussian_filter1d(np.eye(args.mu+1),
+                                               sigma=2)
+        self.gauss_targets = torch.Tensor(self.gauss_targets).cuda()
+
+
+class CichyQuantizedDecoding(CichyQuantized):
+    def create_examples(self, x):
+        '''
+        Create examples from the continuous data (x).
+        '''
+        rf = self.args.rf
+        nc = self.args.num_channels
+
+        channel_inds = list(range(nc)) + [2*nc, 2*nc+1]
+
+        # find the indices of the start of each example based on -100ms
+        # before the stimulus in the condition channel (612)
+        shifted = x[:, -2, 1:] - x[:, -2, :-1]
+        inds = np.where(shifted > 0)[0] - int(self.args.sr_data/10) + 1
+
+        x = [x[:, channel_inds, ind:ind+rf] for ind in inds]
+        x = np.concatenate(x)
+
+        return x
 
 
 class CichyDataCPU(CichyData):

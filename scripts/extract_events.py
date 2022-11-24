@@ -3,8 +3,8 @@ import os
 import mne
 
 
-inds = [154000, 48000]
-for subj in range(2, 3):
+inds = [154000, 48000, 85000, 70000, 57000, 67000, 49000, 89000, 187000, 56000, 37000, 106000, 81000, 83000, 240000]
+for subj in range(3, 16):
     print(f"Preprocessing subj{subj:02d}")
     print("--------------------")
 

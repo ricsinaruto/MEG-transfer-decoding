@@ -142,6 +142,46 @@ class SimpleClassifier(Module):
         new_weights = torch.cat(new_weights)
         return torch.linalg.norm(new_weights, ord=1)
 
+    def gradient_analysis(self, args):
+        '''
+        1. Create a batch of random inputs.
+        2. Compute the gradient of the loss with respect to the input.
+        '''
+        grads = []
+        for i in range(100):
+            args.num_channels = 306
+            num_samples = 100
+            self.eval()
+            self.criterion_class_nored = CrossEntropyLoss(reduction='none').cuda()
+
+            # create a batch of random inputs
+            x = torch.randn(
+                (num_samples, args.num_channels, args.sample_rate),
+                requires_grad=True,
+                device='cuda')
+
+            # add target classes to the 2nd dimension of x
+            y = torch.randint(0, args.num_classes, (num_samples,)).cuda()
+            x = torch.cat((x, y.reshape(-1, 1, 1).repeat(1, 1, x.shape[2])),
+                        dim=1)
+
+            x.retain_grad()
+
+            # create sid
+            sid = torch.randint(0, args.subjects, (num_samples,)).cuda()
+
+            # compute the gradient of the loss with respect to the input
+            losses, _, _ = self.loss(x, sid=sid)
+            losses['trainloss/optloss/Training loss: '].backward()
+
+            grad = x.grad[:, :args.num_channels, :]
+            grad = grad.detach().cpu().numpy()
+            grads.append(grad)
+
+        # save the gradient
+        grads = np.concatenate(grads)
+        np.save(os.path.join(args.result_dir, 'grads.npy'), grads)
+
     def loss(self, x, i=0, sid=None, train=True, criterion=None):
         '''
         Run the model in forward mode and compute loss for this batch.

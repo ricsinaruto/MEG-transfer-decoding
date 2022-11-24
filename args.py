@@ -4,54 +4,54 @@ import torch.nn.functional as F
 import numpy as np
 
 from classifiers_linear import LDA
-from classifiers_simpleNN import SimpleClassFakeLoss, SimpleClassAutoregcheck
+from classifiers_simpleNN import SimpleClassifier
 from wavenets_simple import WavenetSimple
-from wavenets_full import WavenetFull, WavenetFullEmbPca
+from wavenets_full import WavenetFull
 from classifiers_wavenet import WavenetClassifier, WavenetContClass
 from cichy_data import CichyData, CichyContData, CichyQuantized
 
 
 class Args:
     gpu = '1'  # cuda gpu index
-    func = {'train': True}  # dict of functions to run from training.py
+    func = {'LDA_baseline': True}  # dict of functions to run from training.py
 
     def __init__(self):
-        n = 1  # can be used to do multiple runs, e.g. over subjects
+        n = 15  # can be used to do multiple runs, e.g. over subjects
 
         # experiment arguments
         self.name = 'args.py'  # name of this file, don't change
-        self.fix_seed = True
         self.common_dataset = False
+        self.fix_seed = False
         self.load_dataset = True  # whether to load self.dataset
-        self.learning_rate = 0.0003  # learning rate for Adam
-        self.max_trials = 1.0  # ratio of training data (1=max)
-        self.val_max_trials = False
-        self.batch_size = 5  # batch size for training and validation data
-        self.epochs = 1000  # number of loops over training data
+        self.learning_rate = 0.00005  # learning rate for Adam
+        self.max_trials = 1  # ratio of training data (1=max)
+        self.val_max_trials = True
+        self.batch_size = 6  # batch size for training and validation data
+        self.epochs = 500  # number of loops over training data
+        self.anneal_lr = False
         self.val_freq = 20  # how often to validate (in epochs)
         self.print_freq = 5  # how often to print metrics (in epochs)
-        self.anneal_lr = False  # whether to anneal learning rate
         self.save_curves = True  # whether to save loss curves to file
         self.load_model = False
         self.result_dir = [os.path.join(  # path(s) to save model and others
             'results',
             'cichy_epoched',
-            'subj1',
-            'cont_quantized',
-            'dumb_conv')]
-        self.model = SimpleClassAutoregcheck  # class of model to use
-        self.dataset = CichyQuantized  # dataset class for loading and handling data
+            'indiv25hz8class_lda_conv80',
+            f'subj{i}',
+            'windows') for i in range(n)]
+        self.model = LDA  # class of model to use
+        self.dataset = CichyData  # dataset class for loading and handling data
 
         # wavenet arguments
         self.activation = torch.nn.Identity()  # activation function for models
         self.subjects = 0  # number of subjects used for training
         self.embedding_dim = 0  # subject embedding size
-        self.p_drop = 0.6  # dropout probability
+        self.p_drop = 0.8  # dropout probability
         self.ch_mult = 2  # channel multiplier for hidden channels in wavenet
         self.kernel_size = 2  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 512]  # start and end of timesteps within trials
-        self.rf = 256  # receptive field of wavenet, 2*rf - 1
+        self.sample_rate = [0, 100]  # start and end of timesteps within trials
+        self.rf = 256  # receptive field of wavenet
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
@@ -61,47 +61,54 @@ class Args:
 
         # classifier arguments
         self.wavenet_class = WavenetSimple  # class of wavenet model
-        self.load_conv = False  # where to load neural nerwork
+        self.load_conv = [os.path.join(  # path(s) to save model and others
+            'results',
+            'cichy_epoched',
+            'indiv25hz8class_simpleclassifier',
+            f'subj{i}',
+            'model_end.pt') for i in range(n)]   # where to load neural nerwork
         # dimensionality reduction from
         self.pred = False  # whether to use wavenet in prediction mode
         self.init_model = True  # whether to reinitialize classifier
         self.reg_semb = True  # whether to regularize subject embedding
         self.fixed_wavenet = False  # whether to fix weights of wavenet
         self.alpha_norm = 0.0  # regularization multiplier on weights
-        self.num_classes = 119  # number of classes for classification
-        self.units = [800, 300]  # hidden layer sizes of fully-connected block
-        self.dim_red = 300  # number of pca components for channel reduction
+        self.num_classes = 8  # number of classes for classification
+        self.units = [1000, 100]  # hidden layer sizes of fully-connected block
+        self.dim_red = 80  # number of pca components for channel reduction
         self.stft_freq = 0  # STFT frequency index for LDA_wavelet_freq model
         self.decode_peak = 0.1
+        self.trial_average = False
 
         # quantized wavenet arguments
         self.mu = 255
-        self.residual_channels = 800
-        self.dilation_channels = 800
-        self.skip_channels = 3000
+        self.residual_channels = 1024
+        self.dilation_channels = 1024
+        self.skip_channels = 1024
+        self.class_emb = 10
         self.channel_emb = 30
-        self.class_emb = 2
-        self.quant_emb = 2
-        self.cond_channels = self.class_emb
+        self.cond_channels = self.class_emb + self.channel_emb
         self.head_channels = int(self.skip_channels/2)
         self.conv_bias = False
 
         # dataset arguments
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
-                                 'cichy118_cont', 'preproc_data_osl', 'subj1')
-        self.data_path = [data_path]  # path(s) to data directory
-        self.num_channels = list(range(614))  # channel indices
+                                 'cichy118_cont', 'preproc_data_onepass', 'lowpass25hz')
+        self.data_path = [os.path.join(data_path, 'subj' + str(i)) for i in range(n)]
+        self.num_channels = list(range(307))
         self.numpy = True  # whether data is saved in numpy format
         self.crop = 1  # cropping ratio for trials
         self.whiten = 306  # pca components used in whitening
         self.group_whiten = False  # whether to perform whitening at the GL
-        self.split = np.array([0, 0.1])  # validation split (start, end)
-        self.sr_data = 250  # sampling rate used for downsampling
+        self.split = np.array([0, 0.2])  # validation split (start, end)
+        self.sr_data = 100  # sampling rate used for downsampling
+        self.original_sr = 1000
         self.save_data = True  # whether to save the created data
         self.subjects_data = False  # list of subject inds to use in group data
-        self.num_clip = 4
-        self.dump_data = [os.path.join(data_path, 'cont_quantized_clamp4')]  # path(s) for dumping data
-        self.load_data = self.dump_data  # path(s) for loading data files
+        self.bypass = False
+        self.num_clip = 25
+        self.dump_data = [os.path.join(data_path, 'subj' + str(i), 'train_data8class_pca306', 'c') for i in range(n)]
+        self.load_data = self.dump_data
 
         # analysis arguments
         self.closest_chs = 20  # channel neighbourhood size for spatial PFI

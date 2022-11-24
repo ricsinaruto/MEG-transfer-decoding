@@ -167,13 +167,18 @@ class Experiment:
                     # also compute test loss
                     self.testing()
 
+                else:
+                    path = self.model_path.strip('.pt') + '_epoch.pt'
+                    torch.save(self.model, path, pickle_protocol=4)
+
                 # save loss plots if needed
                 if self.args.save_curves:
                     self.save_curves()
 
         # wrap up training, save model and validation loss
-        path = self.model_path.strip('.pt') + '_end.pt'
-        torch.save(self.model, path, pickle_protocol=4)
+        if self.args.epochs:
+            path = self.model_path.strip('.pt') + '_end.pt'
+            torch.save(self.model, path, pickle_protocol=4)
         self.model.end()
         self.save_validation()
 
@@ -583,8 +588,10 @@ class Experiment:
         self.AR_order = np.arange(self.args.order + 1)
 
         # prepare data tensors
-        x_train = self.dataset.x_train.reshape(self.args.num_channels, -1, 1)
-        x_val = self.dataset.x_val
+        x_train = self.dataset.x_train[:self.args.num_channels, :]
+        x_train = x_train.reshape(self.args.num_channels, -1, 1)
+        x_val = self.dataset.x_val[:self.args.num_channels, :]
+
         outputs = np.zeros((x_val.shape[0], x_val.shape[1], ts))
         target = np.zeros((x_val.shape[0], x_val.shape[1], ts))
 
@@ -593,6 +600,12 @@ class Experiment:
 
         if self.args.do_anal:
             self.AR_analysis(filters)
+
+        # save outputs and targets as numpy arrays
+        path = os.path.join(self.args.result_dir, 'outputs.npy')
+        np.save(path, outputs)
+        path = os.path.join(self.args.result_dir, 'target.npy')
+        np.save(path, target)
 
         outputs = torch.Tensor(outputs).float().cuda()
         target = torch.Tensor(target).float().cuda()
@@ -1230,6 +1243,9 @@ class Experiment:
 
         return accs
 
+    def gradient_analysis(self):
+        self.model.gradient_analysis(self.args)
+
     def model_inversion(self):
         '''
         Haufe model inversion method.
@@ -1499,6 +1515,8 @@ def main(Args):
                 e.PFIfreq()
             if Args.func.get('PFIfreq_ch'):
                 e.PFIfreq_ch()
+            if Args.func.get('gradient_analysis'):
+                e.gradient_analysis()
             if Args.func.get('model_inversion'):
                 e.model_inversion()
             if Args.func.get('multi2pair'):
