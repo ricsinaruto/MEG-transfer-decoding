@@ -3,6 +3,7 @@ import mat73
 import numpy as np
 
 from scipy.io import loadmat
+import pickle
 
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, RobustScaler
@@ -63,6 +64,15 @@ class MRCData(DondersData):
         x_train = norm.transform(x_train)
         x_val = norm.transform(x_val)
         x_test = norm.transform(x_test)
+
+        # save pca and norm to data_dir
+        if self.args.save_whiten:
+            path = os.path.join(self.args.save_whiten, 'pca')
+            with open(path, 'wb') as file:
+                pickle.dump(pca, file)
+            path = os.path.join(self.args.save_whiten, 'norm')
+            with open(path, 'wb') as file:
+                pickle.dump(norm, file)
 
         return x_train, x_val, x_test
 

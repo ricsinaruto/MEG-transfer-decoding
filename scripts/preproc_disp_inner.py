@@ -29,8 +29,8 @@ event_dict = {#'event_off':1,
 
 # NEED TO INTERPOLATE BAD CHANNELS
 
-dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/preproc250hz_deb'
-outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/preproc250hz_deb/inner_speech_sub_debchn2'
+dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/oslpy'
+outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/inner_speech_sub_2s'
 files = files = [f for f in os.listdir(dataset_path) if 'raw.fif' in f]
 for f in files:
     raw = mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=True)
@@ -95,16 +95,16 @@ for f in files:
 
     new_events = np.array(new_events)
 
-    raw = raw.pick_channels(['MEG1213', 'MEG0612', 'MEG0423', 'MEG2322', 'MEG0232', 'MEG2612', 'MEG2532', 'MEG0722', 'MEG1143', 'MEG1022', 'MEG0513', 'MEG1212',
-                             'MEG0743', 'MEG1723', 'MEG2012', 'MEG1613', 'MEG2042', 'MEG2523', 'MEG1832', 'MEG1543', 'MEG2333', 'MEG1443', 'MEG1943', 'MEG0533'])
+    #raw = raw.pick_channels(['MEG1213', 'MEG0612', 'MEG0423', 'MEG2322', 'MEG0232', 'MEG2612', 'MEG2532', 'MEG0722', 'MEG1143', 'MEG1022', 'MEG0513', 'MEG1212',
+    #                         'MEG0743', 'MEG1723', 'MEG2012', 'MEG1613', 'MEG2042', 'MEG2523', 'MEG1832', 'MEG1543', 'MEG2333', 'MEG1443', 'MEG1943', 'MEG0533'])
 
     epochs = mne.Epochs(raw,
                         new_events,
                         event_id=event_dict,
-                        tmin=-0.1,
+                        tmin=-1.0,
                         tmax=1.0,
                         baseline=None,
-                        picks=['grad'],
+                        picks=['meg'],
                         reject=None,
                         preload=True)
 

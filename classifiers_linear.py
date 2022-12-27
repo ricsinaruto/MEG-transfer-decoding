@@ -1,8 +1,10 @@
 import torch
 import numpy as np
 import sys
+import os
 import pywt
-
+import pickle
+import traceback
 from mne.time_frequency import tfr_array_morlet
 
 from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
@@ -15,7 +17,7 @@ from xgboost import XGBClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.svm import SVC, LinearSVC
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, Lasso
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
@@ -38,12 +40,35 @@ class LDA:
         # if needed load a model for dimensionality reduction instead of PCA
         if args.load_conv:
             try:
-                model = torch.load(args.load_conv)
-                model.loaded(args)
-                model.cuda()
+                if torch.cuda.is_available():
+                    model = torch.load(args.load_conv)
+                    model.loaded(args)
+                    model.cuda()
+                else:
+                    model = torch.load(args.load_conv,
+                                       map_location=torch.device('cpu'))
+                    model.loaded(args)
                 self.spatial_conv = model.spatial_conv
             except Exception:
+                # print stack trace
+                #exc_type, exc_value, exc_traceback = sys.exc_info()
+                #traceback.print_exception(exc_type, exc_value, exc_traceback,
+                #                          limit=2, file=sys.stdout)
+
                 print('Couldn\'t load conv model for lda.')
+
+        self.load_whiten(args)
+
+    def load_whiten(self, args):
+        if args.save_whiten:
+            # load pca and norm
+            path = os.path.join(args.save_whiten, 'pca')
+            with open(path, 'rb') as f:
+                self.whiten_pca = pickle.load(f)
+
+            path = os.path.join(args.save_whiten, 'norm')
+            with open(path, 'rb') as f:
+                self.whiten_norm = pickle.load(f)
 
     def init_model(self):
         self.model = LinearDiscriminantAnalysis(solver='lsqr',
@@ -54,13 +79,18 @@ class LDA:
         self.args = args
         self.lda_norm = True
 
-    def run(self, x_train, x_val, window=None):
+        self.load_whiten(args)
+        
+    def run(self, x_train, x_val, window=None, sid_val=None, sid_train=None):
         '''
         Transform data, then train and evaluate LDA.
         '''
         self.window = window
+        self.sid_val = sid_val
+        self.sid_train = sid_train
         x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val)
 
+        print(x_train.shape)
         # fit LDA
         self.model.fit(x_train, y_train)
 
@@ -92,8 +122,8 @@ class LDA:
                 x_val = self.norm.transform(x_val)
 
         # reshape data for LDA
-        x_train = self.prep_lda(x_train)
-        x_val = self.prep_lda(x_val)
+        x_train = self.prep_lda(x_train, sid=self.sid_train)
+        x_val = self.prep_lda(x_val, sid=self.sid_val)
 
         return x_train, x_val, y_train, y_val
 
@@ -116,7 +146,7 @@ class LDA:
 
         return self.model.predict_proba(x_val), y_val
 
-    def eval(self, x_val, window=None):
+    def eval(self, x_val, window=None, sid=None):
         '''
         Evaluate an already trained LDA model.
         '''
@@ -128,7 +158,7 @@ class LDA:
             if self.lda_norm:
                 x_val = self.norm.transform(x_val)
 
-        x_val = self.prep_lda(x_val)
+        x_val = self.prep_lda(x_val, sid=sid)
         return self.model.score(x_val, y_val), x_val, y_val
 
     def prepare(self, data):
@@ -139,15 +169,32 @@ class LDA:
         ch = self.args.num_channels
         y = data[:, -1, 0].cpu().numpy()
 
+        data = data[:, :ch, :]
+
+        if self.args.save_whiten:
+            data = data.detach().cpu().numpy()
+            data = data.transpose(0, 2, 1)
+            data = data.reshape(-1, data.shape[2])
+
+            # apply whiten_pca and whiten_norm
+            data = self.whiten_pca.transform(data)
+            data = self.whiten_norm.transform(data)
+
+            data = data.reshape(-1, self.ts, ch)
+            data = data.transpose(0, 2, 1)
+
+            # put data back in tensor
+            data = torch.from_numpy(data).float().cuda()
+
         # if needed apply convolutional dimensionality reduction
-        data = self.spatial_conv(data[:, :ch, :]).detach().cpu().numpy()
+        data = self.spatial_conv(data).detach().cpu().numpy()
 
         data = data.transpose(0, 2, 1)
         data = data.reshape(-1, data.shape[2])
 
         return data, y
 
-    def prep_lda(self, data):
+    def prep_lda(self, data, sid=None):
         '''
         Reshape data for LDA.
         '''
@@ -260,7 +307,7 @@ class LDA_average(LDA):
 
 
 class LDA_cov(LDA):
-    def prep_lda(self, data, metric=np.cov):
+    def prep_lda(self, data, metric=np.cov, sid=None):
         '''
         Reshape data for LDA.
         '''
@@ -270,6 +317,34 @@ class LDA_cov(LDA):
         data_cov = []
         for i in range(data.shape[0]):
             mat = np.triu(metric(data[i])).reshape(-1)
+            data_cov.append(mat[mat != 0])
+
+        return np.array(data_cov)
+
+
+class LDA_cov_sid(LDA_cov):
+    def __init__(self, args):
+        super().__init__(args)
+
+        self.sess_covs = []
+        # load session covariances as numpy arrays
+        # ordered as sid-s
+        for i in [3, 4, 5, 6, 0, 1, 2, 7, 8]:
+            file = os.path.join(args.data_path, f'avg_cov_diff{i}.npy')
+            self.sess_covs.append(np.load(file))
+
+    def prep_lda(self, data, metric=np.cov, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+
+        data_cov = []
+        for i in range(data.shape[0]):
+            mat = metric(data[i]) + self.sess_covs[sid[i]]
+            
+            mat = np.triu(mat).reshape(-1)
             data_cov.append(mat[mat != 0])
 
         return np.array(data_cov)
@@ -617,11 +692,11 @@ class LogisticRegL1(LDA):
     Logistic Regression model using the functionalities of the LDA class.
     Uses L1 regularization.
     '''
-    def __init__(self, args):
-        super(LogisticRegL1, self).__init__(args)
+    def init_model(self):
         self.model = LogisticRegression(multi_class='ovr',
                                         penalty='l1',
                                         solver='liblinear')
+        self.fit_pca = False
 
 
 class linearSVM(LDA):
@@ -656,9 +731,9 @@ class SVM(LDA):
     '''
     SVM model using the functionalities of the LDA class.
     '''
-    def __init__(self, args):
-        super(SVM, self).__init__(args)
+    def init_model(self):
         self.model = SVC()
+        self.fit_pca = False
 
 
 class SVM_db4(LDA):

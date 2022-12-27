@@ -404,7 +404,7 @@ class Experiment:
         loss = mse(outputs, targets)
         print(loss.item())
 
-    def lda_baseline(self):
+    def lda_baseline(self, filewrite=True, run_test=True, save_model=True):
         '''
         Train a separate linear model across time windows.
         '''
@@ -425,37 +425,71 @@ class Experiment:
             end = hw-1 if self.args.halfwin_uneven else hw
 
             # train model on a specific time window
-            acc, _, _ = self.model.run(x_t, x_v, (i-hw, i+end))
+            acc, _, _ = self.model.run(x_t,
+                                       x_v,
+                                       (i-hw, i+end),
+                                       sid_train=self.dataset.sub_id['train'],
+                                       sid_val=self.dataset.sub_id['val'])
             print(acc)
             val_accs.append(str(acc))
 
-            acc, _, _ = self.model.eval(x_t, (i-hw, i+end))
-            train_accs.append(str(acc))
+            if run_test:
+                acc, _, _ = self.model.eval(
+                    x_t, (i-hw, i+end), sid=self.dataset.sub_id['train'])
+                train_accs.append(str(acc))
 
-            x_t = self.dataset.x_test_t.clone()
-            acc, _, _ = self.model.eval(x_t, (i-hw, i+end))
-            test_accs.append(str(acc))
+                x_t = self.dataset.x_test_t.clone()
+                acc, _, _ = self.model.eval(
+                    x_t, (i-hw, i+end), sid=self.dataset.sub_id['test'])
+                test_accs.append(str(acc))
 
-            # save each model
-            with open(self.model_path + str(i), 'wb') as file:
-                pickle.dump(self.model, file)
+            if save_model:
+                # save each model
+                with open(self.model_path + str(i), 'wb') as file:
+                    pickle.dump(self.model, file)
 
             # re-initialize model
             self.model.init_model()
 
-        path = os.path.join(self.args.result_dir, 'val_loss.txt')
-        with open(path, 'w') as f:
-            f.write('\n'.join(val_accs))
+        if filewrite:
+            path = os.path.join(self.args.result_dir, 'val_loss.txt')
+            with open(path, 'w') as f:
+                f.write('\n'.join(val_accs))
 
-        path = os.path.join(self.args.result_dir, 'train_loss.txt')
-        with open(path, 'w') as f:
-            f.write('\n'.join(train_accs))
+            path = os.path.join(self.args.result_dir, 'train_loss.txt')
+            with open(path, 'w') as f:
+                f.write('\n'.join(train_accs))
 
-        path = os.path.join(self.args.result_dir, 'test_loss.txt')
-        with open(path, 'w') as f:
-            f.write('\n'.join(test_accs))
+            path = os.path.join(self.args.result_dir, 'test_loss.txt')
+            with open(path, 'w') as f:
+                f.write('\n'.join(test_accs))
 
         return val_accs
+
+    def lda_channel(self):
+        '''
+        Train a separate lda_baseline model for each channel.
+        '''
+        # copy self.datasset.x
+        x_train = self.dataset.x_train_t.clone()
+        x_val = self.dataset.x_val_t.clone()
+        x_test = self.dataset.x_test_t.clone()
+
+        accs = []
+        num_ch = self.args.num_channels
+        for ch in range(int(num_ch/3)):
+            current_chs = [ch*3, ch*3+1, ch*3+2, num_ch]
+            self.dataset.x_train_t = x_train[:, current_chs, :]
+            self.dataset.x_val_t = x_val[:, current_chs, :]
+            self.dataset.x_test_t = x_test[:, current_chs, :]
+            self.args.num_channels = 3
+
+            acc = self.lda_baseline()
+            accs.append(acc[0])
+
+        path = os.path.join(self.args.result_dir, 'val_loss.txt')
+        with open(path, 'w') as f:
+            f.write('\n'.join(accs))
 
     def lda_pairwise(self):
         '''
@@ -473,25 +507,33 @@ class Experiment:
         for c1 in range(nc):
             for c2 in range(c1+1, nc):
                 # set labels for pairwise classification
+                c1_inds = x_t[:, chn, 0] == c1
+                c2_inds = x_t[:, chn, 0] == c2
+
                 self.dataset.x_train_t = x_t.clone()
-                self.dataset.x_train_t[x_t[:, chn, 0] == c1, chn, :] = 0
-                self.dataset.x_train_t[x_t[:, chn, 0] == c2, chn, :] = 1
+                self.dataset.x_train_t[c1_inds, chn, :] = 0
+                self.dataset.x_train_t[c2_inds, chn, :] = 1
 
                 # select trials from these 2 classes
-                inds = (x_t[:, chn, 0] == c1) | (x_t[:, chn, 0] == c2)
+                inds = (c1_inds) | (c2_inds)
                 #print(x_t[:100, chn, 0])
                 self.dataset.x_train_t = self.dataset.x_train_t[inds, :, :]
                 #print(self.dataset.x_train_t.shape)
 
                 # repeat for validation data
-                self.dataset.x_val_t = x_v.clone()
-                self.dataset.x_val_t[x_v[:, chn, 0] == c1, chn, :] = 0
-                self.dataset.x_val_t[x_v[:, chn, 0] == c2, chn, :] = 1
+                c1_inds = x_v[:, chn, 0] == c1
+                c2_inds = x_v[:, chn, 0] == c2
 
-                inds = (x_v[:, chn, 0] == c1) | (x_v[:, chn, 0] == c2)
+                self.dataset.x_val_t = x_v.clone()
+                self.dataset.x_val_t[c1_inds, chn, :] = 0
+                self.dataset.x_val_t[c2_inds, chn, :] = 1
+
+                inds = (c1_inds) | (c2_inds)
                 self.dataset.x_val_t = self.dataset.x_val_t[inds, :, :]
 
-                accs = self.lda_baseline()
+                accs = self.lda_baseline(filewrite=False,
+                                         run_test=False,
+                                         save_model=False)
                 accuracies.append(';'.join(accs))
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
@@ -506,13 +548,16 @@ class Experiment:
         with open(self.model_path, 'rb') as file:
             self.model = pickle.load(file)
 
+        self.model.loaded(self.args)
+
         path = os.path.join(self.args.result_dir, 'val_loss_subs.txt')
         with open(path, 'w') as f:
             for i in range(self.args.subjects):
                 inds = self.dataset.sub_id['val'] == i
                 x_val = self.dataset.x_val_t[inds, :, :]
 
-                acc = self.model.eval(x_val)
+                acc, _, _ = self.model.eval(x_val)
+                print(acc)
                 f.write(str(acc) + '\n')
 
     def lda_eval_train(self):
@@ -1037,9 +1082,14 @@ class Experiment:
         '''
         Permutation Feature Importance (PFI) function for channels.
         '''
+        multi = 1 if 'eeg' in self.args.data_path else 3
+        dataset = self.dataset.x_val_t
+        if not self.args.PFI_val:
+            dataset = self.dataset.x_train_t
+
         top_chs = self.args.closest_chs
-        val_t = self.dataset.x_val_t.clone()
-        shuffled_val_t = self.dataset.x_val_t.clone()
+        val_t = dataset.clone()
+        shuffled_val_t = dataset.clone()
         chn = val_t.shape[1] - 1
 
         # whether dealing with LDA or deep learning models
@@ -1049,12 +1099,11 @@ class Experiment:
             val_func = self.kernelPFI
 
         # read a file containing closest channels to each channel location
-        path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
-        with open(path, 'rb') as f:
+        with open(top_chs, 'rb') as f:
             closest_k = pickle.load(f)
 
         # evaluate without channel shuffling
-        og_loss = val_func(self.dataset.x_val_t, True)
+        og_loss = val_func(dataset, True)
 
         # loop over channels and permute channels in vicinity of i-th channel
         perm_list = []
@@ -1073,12 +1122,16 @@ class Experiment:
                 tmax = t[1]
                 loss_list = [og_loss]
 
-                for i in range(int(chn/3)):
-                    self.dataset.x_val_t = val_t.clone()
+                for i in range(int(chn/multi)):
+                    dataset = val_t.clone()
 
                     # need to select magnetometer and 2 gradiometers
-                    a = np.array(closest_k[i]) * 3
-                    chn_idx = np.append(np.append(a, a+1), a+2)
+                    a = np.array(closest_k[i]) * multi
+
+                    if multi > 1:
+                        chn_idx = np.append(np.append(a, a+1), a+2)
+                    else:
+                        chn_idx = a
 
                     # shuffle closest k channels
                     if self.args.PFI_inverse:
@@ -1086,12 +1139,12 @@ class Experiment:
                         mask[chn_idx] = 0
                         mask[chn] = 0
                         window = shuffled_val_t[:, mask, tmin:tmax].clone()
-                        self.dataset.x_val_t[:, mask, tmin:tmax] = window
+                        dataset[:, mask, tmin:tmax] = window
                     else:
                         window = shuffled_val_t[:, chn_idx, tmin:tmax].clone()
-                        self.dataset.x_val_t[:, chn_idx, tmin:tmax] = window
+                        dataset[:, chn_idx, tmin:tmax] = window
 
-                    loss = val_func(self.dataset.x_val_t)
+                    loss = val_func(dataset)
                     loss_list.append(loss)
 
                 windows.append(np.array(loss_list))
@@ -1099,7 +1152,8 @@ class Experiment:
             perm_list.append(np.array(windows))
 
         # save accuracies to file
-        name = 'val_loss_PFIch' + str(top_chs) + '.npy'
+        fname = os.path.basename(os.path.normpath(top_chs))
+        name = 'val_loss_PFI' + fname + '.npy'
         path = os.path.join(self.args.result_dir, name)
         np.save(path, np.array(perm_list))
 
@@ -1206,10 +1260,13 @@ class Experiment:
         times = self.dataset.x_val_t.shape[2]
         accs = []
 
-        for i in range(hw, times-hw):
+        for i in range(hw, times-hw+1):
             # load correct model
             model_path = os.path.join(
                 '/'.join(self.model_path.split('/')[:-1]), 'model.pt' + str(i))
+
+            if 'model' in self.args.load_model:
+                model_path = self.args.load_model
             self.model = pickle.load(open(model_path, 'rb'))
             self.model.loaded(self.args)
 
@@ -1396,6 +1453,7 @@ def main(Args):
         args_pass.load_conv = checklist(args.load_conv, i)
         args_pass.compare_model = checklist(args.compare_model, i)
         args_pass.stft_freq = checklist(args.stft_freq, i)
+        args_pass.save_whiten = checklist(args.save_whiten, i)
 
         if isinstance(args.num_channels[0], list):
             args_pass.num_channels = args.num_channels[i]
@@ -1473,6 +1531,8 @@ def main(Args):
                 e.lda_baseline()
             if Args.func.get('LDA_pairwise'):
                 e.lda_pairwise()
+            if Args.func.get('LDA_channel'):
+                e.lda_channel()
             if Args.func.get('train'):
                 e.train()
             if Args.func.get('analyse_kernels'):

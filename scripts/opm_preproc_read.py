@@ -5,7 +5,7 @@ import pandas as pd
 
 # reading trials
 events = pd.read_csv(
-    '../data/opm_rich/Task/20220908_115229_events.tsv', sep='\t')
+    '/well/woolrich/projects/disp_csaky/opm_lukas/20221019_085012_events.tsv', sep='\t')
 
 event_c = np.array([events['value'][i] for i in range(len(events))])
 event_t = np.array([events['sample'][i] for i in range(len(events))])
@@ -21,8 +21,8 @@ for ind, (et, ec) in enumerate(zip(event_t[1:-1], event_c[1:-1])):
 
 new_events = np.array(new_events)
 
-outdir = '/well/woolrich/projects/disp_csaky/opm_rich/reading/'
-path = '/well/woolrich/projects/disp_csaky/opm_rich/raw_preproc_mfc.fif'
+outdir = '/well/woolrich/projects/disp_csaky/opm_lukas/reading/'
+path = '/well/woolrich/projects/disp_csaky/opm_lukas/raw_preproc_mfc.fif'
 raw = mne.io.read_raw_fif(path, preload=True)
 
 

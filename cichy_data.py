@@ -238,6 +238,11 @@ class CichyData(MRCData):
             # dataset shape: conditions x trials x timesteps x channels
             dataset = np.array([t[:min_trials, :, :] for t in dataset])
 
+            if args.whiten > 1000:
+                args.num_channels = list(range(dataset.shape[-1]))
+                args.whiten = dataset.shape[-1]
+                channels = dataset.shape[-1]
+
             # choose first 306 channels
             dataset = dataset.transpose(0, 1, 3, 2)
             dataset = dataset[:, :, args.num_channels, :]
@@ -313,6 +318,26 @@ class CichyData(MRCData):
         return x
 
 
+class CichyDataCHN(CichyData):
+    '''
+    Same as CichyData, but channel numbers are not pre-specified.
+    '''
+    def load_mat_data(self, args):
+        '''
+        Loads ready-to-train splits from mat files.
+        Number of channels is inferred from number of files.
+        '''
+
+        # get number of channels by counting files in args.load_data
+        chn = []
+        for f in os.listdir(args.data_path):
+            if 'ch' in f:
+                chn.append(int(f.split('.')[0].split('ch')[-1]))
+
+        args.num_channels = sorted(chn)
+        super().load_mat_data(args)
+
+
 class CichyDataRandsample(CichyData):
     '''
     Class for randomizing the batch retrieval for the Cichy dataset.
@@ -328,7 +353,27 @@ class CichyDataRandsample(CichyData):
         return self.x_train_t[inds, :, :], self.sub_id['train'][inds]
 
 
-class CichyDataCrossval(CichyData):
+class CichyDataRobust(CichyData):
+    def normalize(self, x_train, x_val, x_test):
+        '''
+        Standardize and whiten data if needed.
+        '''
+        # standardize dataset along channels
+        self.norm = RobustScaler()
+        self.norm.fit(x_train)
+        print(x_train.shape)
+        x_train = self.norm.transform(x_train)
+        x_val = self.norm.transform(x_val)
+        x_test = self.norm.transform(x_test)
+
+        # if needed, remove covariance with PCA
+        if self.args.whiten:
+            x_train, x_val, x_test = self.whiten(x_train, x_val, x_test)
+
+        return x_train.T, x_val.T, x_test.T
+
+
+class CichyDataCrossval(CichyDataRobust):
     def splitting(self, dataset, args):
         split = args.split[1] - args.split[0]
         split = int(split*dataset.shape[1])
@@ -344,25 +389,6 @@ class CichyDataCrossval(CichyData):
         x_train = x_train[:, split:, :, :]
 
         return x_train, x_val, x_test
-
-
-class CichyDataRobust(CichyData):
-    def normalize(self, x_train, x_val, x_test):
-        '''
-        Standardize and whiten data if needed.
-        '''
-        # standardize dataset along channels
-        self.norm = RobustScaler()
-        self.norm.fit(x_train)
-        x_train = self.norm.transform(x_train)
-        x_val = self.norm.transform(x_val)
-        x_test = self.norm.transform(x_test)
-
-        # if needed, remove covariance with PCA
-        if self.args.whiten:
-            x_train, x_val, x_test = self.whiten(x_train, x_val, x_test)
-
-        return x_train.T, x_val.T, x_test.T
 
 
 class CichyDataNoNorm(CichyData):

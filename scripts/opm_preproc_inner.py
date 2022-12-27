@@ -5,7 +5,7 @@ import pandas as pd
 
 # reading trials
 events = pd.read_csv(
-    '../data/opm_rich/Task/20220908_115229_events.tsv', sep='\t')
+    '/well/woolrich/projects/disp_csaky/opm_lukas/20221019_085012_events.tsv', sep='\t')
 
 event_c = np.array([events['value'][i] for i in range(len(events))])
 event_t = np.array([events['sample'][i] for i in range(len(events))])
@@ -45,8 +45,8 @@ for ind, (et, ec) in enumerate(zip(event_t[1:-1], event_c[1:-1])):
     if think_trial:
         count2 += 1
         split_events = event_c[i-18:i-4]
-        tind = np.nonzero(split_events == 7)[0][-1]
 
+        tind = np.nonzero(split_events == 7)[0][-1]
         tind += i-18
 
         if event_c[tind+2] == 8:
@@ -68,19 +68,28 @@ for ind, (et, ec) in enumerate(zip(event_t[1:-1], event_c[1:-1])):
         else:
             print('erorr8')
 
+    # check if last two event times are the same
+    if len(new_events) > 4:
+        if new_events[-1][0] == new_events[-5][0]:
+            print(new_events[-1][0])
+
+        if new_events[-1][2] < 2:
+            print(new_events[-1][2])
+            print(new_events[-1][0])
+
 print(count1)
 print(count2)
 
 new_events = np.array(new_events)
 
-outdir = '/well/woolrich/projects/disp_csaky/opm_rich/sub_innerspeech1_40hz/'
-path = '/well/woolrich/projects/disp_csaky/opm_rich/raw_preproc_mfc.fif'
+outdir = '/well/woolrich/projects/disp_csaky/opm_lukas/sub_innerspeech1_40hz_mark/'
+path = '/well/woolrich/projects/disp_csaky/opm_lukas/raw_preproc_mark_mfc.fif'
 raw = mne.io.read_raw_fif(path, preload=True)
 
 
 epochs = mne.Epochs(raw,
                     new_events,
-                    tmin=-0.1,
+                    tmin=-1,
                     tmax=1,
                     baseline=None,
                     picks=['eeg'],
@@ -93,7 +102,7 @@ for epoch, event in zip(epochs, epochs.events):
     data = epoch.T.astype(np.float32)
 
     event_id = event[-1] - 2
-    os.makedirs(f"{outdir}/cond{event_id}", exist_ok=True)
+    os.makedirs(f"{outdir}/cond{event_id}")
 
     n_trials = int(len(os.listdir(f"{outdir}/cond{event_id}")))
     np.save(f"{outdir}/cond{event_id}/trial{n_trials}.npy", data)
