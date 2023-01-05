@@ -12,7 +12,7 @@ for i in range(2, 12):
 
     base = "/gpfs2/well/woolrich/projects/"
     dataset_path = base + f"disp_csaky/eeg/session{sid}/task.cdt"
-    outdir = base + f"disp_csaky/eeg/session{sid}/preproc1_40hz_noica"
+    outdir = base + f"disp_csaky/eeg/session{sid}/preproc1_20hz_noica"
 
     osl_outdir = os.path.join(outdir, 'oslpy')
     report_dir = os.path.join(osl_outdir, 'report')
@@ -27,7 +27,7 @@ for i in range(2, 12):
             words/toilet: 5
             words/pain: 6
     preproc:
-    - filter:         {l_freq: 1, h_freq: 40, method: 'iir', iir_params: {order: 5, ftype: 'butter'}}
+    - filter:         {l_freq: 1, h_freq: 20, method: 'iir', iir_params: {order: 5, ftype: 'butter'}}
     - bad_channels:   {picks: 'eeg', significance_level: 0.4}
     - bad_segments:   {segment_len: 200, picks: 'eeg', significance_level: 0.1}
     - bad_segments:   {segment_len: 400, picks: 'eeg', significance_level: 0.1}

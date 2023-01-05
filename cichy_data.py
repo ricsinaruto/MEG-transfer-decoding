@@ -255,6 +255,7 @@ class CichyData(MRCData):
             max_trials = round(args.max_trials * x_train.shape[1])
             x_train = x_train[:, :max_trials, :, :]
 
+            print(x_train.shape)
             x_train = x_train.transpose(0, 1, 3, 2).reshape(-1, channels)
             x_val = x_val.transpose(0, 1, 3, 2).reshape(-1, channels)
             x_test = x_test.transpose(0, 1, 3, 2).reshape(-1, channels)
@@ -316,6 +317,43 @@ class CichyData(MRCData):
 
         x = np.array(array).reshape(-1, x.shape[2] + 1, timesteps)
         return x
+
+
+class CichyDataTrialNorm(CichyData):
+    def normalize(self, x_train, x_val, x_test):
+        '''
+        Standardize and whiten data if needed.
+        '''
+        # standardize dataset along channels
+        self.norm = StandardScaler()
+
+        # expand shape to trials x timesteps x channels
+        x_train = x_train.reshape(-1, self.timesteps, x_train.shape[1])
+        x_val = x_val.reshape(-1, self.timesteps, x_val.shape[1])
+        x_test = x_test.reshape(-1, self.timesteps, x_test.shape[1])
+
+        # squeeze to trials x (timesteps x channels)
+        x_train = x_train.reshape(x_train.shape[0], -1)
+        x_val = x_val.reshape(x_val.shape[0], -1)
+        x_test = x_test.reshape(x_test.shape[0], -1)
+
+        self.norm.fit(x_train)
+        print(x_train.shape)
+        x_train = self.norm.transform(x_train)
+        x_val = self.norm.transform(x_val)
+        x_test = self.norm.transform(x_test)
+
+        # expand shape to trials x timesteps x channels
+        x_train = x_train.reshape(x_train.shape[0], self.timesteps, -1)
+        x_val = x_val.reshape(x_val.shape[0], self.timesteps, -1)
+        x_test = x_test.reshape(x_test.shape[0], self.timesteps, -1)
+
+        # squeeze to (trials x timesteps) x channels
+        x_train = x_train.reshape(-1, x_train.shape[2])
+        x_val = x_val.reshape(-1, x_val.shape[2])
+        x_test = x_test.reshape(-1, x_test.shape[2])
+
+        return x_train.T, x_val.T, x_test.T
 
 
 class CichyDataCHN(CichyData):

@@ -37,7 +37,7 @@ class Args:
             'disp_epoched',
             'eeg',
             '9sessions_noica',
-            'PFIchannels_longepochs')]
+            'standard_cov_longepochs')]
         self.model = LDA_cov  # class of model to use
         self.dataset = CichyData  # dataset class for loading and handling data
 
@@ -50,7 +50,7 @@ class Args:
         self.ch_mult = 2  # channel multiplier for hidden channels in wavenet
         self.kernel_size = 5  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 2000]  # start and end of timesteps within trials
+        self.sample_rate = [0, 200]  # start and end of timesteps within trials
         self.rf = 8  # receptive field of wavenet
         rf = 8
         ks = self.kernel_size
@@ -84,21 +84,21 @@ class Args:
                                  'disp_csaky', 'eeg',
                                  'preproc1_40hz_noica', 'inner_speech_long')
         self.data_path = [os.path.join(data_path)] * n  # path(s) to data directory
-        self.num_channels = [11, 15, 17, 18, 23, 25, 26, 28, 29, 30, 31, 32, 33, 34, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 52, 53]#[36,31,5,167,174,28,63,177,33,19,30,140,47,45,166,130,121,168,145,131,132,200,275,176,304,272,17,279,133,149,281,165,181,46,120,15,172,249,198,32,37,6,35,151,303,147,34,27,182,150,173,38,179,129,270,274,250,199,178,170,171,16,29,280,152,141,143,305,251,146,144,65,148,7,24,175,169,273,134,271,25,138,64,26,18,3,142,122,139,4,8,180,20,306]
+        self.num_channels = list(range(53))#[36,31,5,167,174,28,63,177,33,19,30,140,47,45,166,130,121,168,145,131,132,200,275,176,304,272,17,279,133,149,281,165,181,46,120,15,172,249,198,32,37,6,35,151,303,147,34,27,182,150,173,38,179,129,270,274,250,199,178,170,171,16,29,280,152,141,143,305,251,146,144,65,148,7,24,175,169,273,134,271,25,138,64,26,18,3,142,122,139,4,8,180,20,306]
         self.numpy = True  # whether data is saved in numpy format
         self.crop = 1  # cropping ratio for trials
         self.whiten = False  # pca components used in whitening
         self.group_whiten = False  # whether to perform whitening at the GL
         self.split = np.array([0, 0.1])  # validation split (start, end)
-        self.sr_data = 1000  # sampling rate used for downsampling
+        self.sr_data = 100  # sampling rate used for downsampling
         self.original_sr = 1000  # original sampling rate of data
         self.save_data = True  # whether to save the created data
         self.val_max_trials = False
         self.save_whiten = False
         self.subjects_data = False  # list of subject inds to use in group data
         self.dump_data = [os.path.join(
-            data_path, 'standard_scaler_norandom1000sr' + str(i), 'c') for i in range(n)]  # path(s) for dumping data
-        self.load_data = self.dump_data  # path(s) for loading data files
+            data_path, 'standard_scaler_norandom100sr' + str(i), 'c') for i in range(n)]  # path(s) for dumping data
+        self.load_data = ''#self.dump_data  # path(s) for loading data files
 
         # analysis arguments
         self.closest_chs = 'notebooks/eeg_closest1'  # channel neighbourhood size for spatial PFI
@@ -107,7 +107,7 @@ class Args:
         self.pfich_timesteps = [[0, 2000]]  # time window for spatiotemporal PFI
         self.PFI_perms = 2  # number of PFI permutations
         self.PFI_val = False  # whether to use validation set for PFI
-        self.halfwin = 1000  # half window size for temporal PFI
+        self.halfwin = 100  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
         self.generate_length = self.sr_data * 1000  # generated timeseries len

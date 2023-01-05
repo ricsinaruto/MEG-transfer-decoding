@@ -17,7 +17,7 @@ from xgboost import XGBClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.svm import SVC, LinearSVC
-from sklearn.linear_model import LogisticRegression, Lasso
+from sklearn.linear_model import LogisticRegression, Lasso, LinearRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
@@ -322,6 +322,77 @@ class LDA_cov(LDA):
         return np.array(data_cov)
 
 
+class LDA_cov_shifted(LDA_cov):
+    def prep_lda(self, data, metric=np.cov, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+
+        # shift data
+        t_window = [400, 500]
+        max_inds = np.argmax(data[:, 17, t_window[0]:t_window[1]], axis=1)
+        max_inds += t_window[0]
+
+        peak = 450
+        # realign the last dimension of each trial so that max_inds becomes the peak
+        rolled = []
+        for i in range(data.shape[0]):
+            trial = np.roll(data[i], peak - max_inds[i], axis=1)
+            rolled.append(trial[:, 50:-50])
+
+        data = np.array(rolled)
+
+        data_cov = []
+        for i in range(data.shape[0]):
+            mat = np.triu(metric(data[i])).reshape(-1)
+            data_cov.append(mat[mat != 0])
+
+        return np.array(data_cov)
+
+
+class LDA_cov_denoised(LDA_cov):
+    def prep_lda(self, data, metric=np.cov, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data.transpose(0, 2, 1)
+
+        # apply pca for denoising
+        for c in range(data.shape[1]):
+            # compute pca over time x trials
+            pca = PCA(n_components=1)
+
+            # fit pca to data
+            datach = data[:, c, :]
+            pca.fit(datach)
+
+            # get the principal components
+            comps = pca.components_[0]
+
+            for t in range(data.shape[0]):
+                model = LinearRegression()
+
+                # fit model to data
+                data0 = np.array([np.roll(datach[t], i) for i in range(-50,50)]).T
+                model.fit(data0, comps)
+
+                # denoise data
+                denoised = model.predict(data0)
+
+                data[t, c, 50:-50] = denoised[50:-50]
+
+        data = data[:, :, 50:-50]
+        data_cov = []
+        for i in range(data.shape[0]):
+            mat = np.triu(metric(data[i])).reshape(-1)
+            data_cov.append(mat[mat != 0])
+
+        return np.array(data_cov)
+
+
 class LDA_cov_sid(LDA_cov):
     def __init__(self, args):
         super().__init__(args)
@@ -330,8 +401,21 @@ class LDA_cov_sid(LDA_cov):
         # load session covariances as numpy arrays
         # ordered as sid-s
         for i in [3, 4, 5, 6, 0, 1, 2, 7, 8]:
-            file = os.path.join(args.data_path, f'avg_cov_diff{i}.npy')
-            self.sess_covs.append(np.load(file))
+            file = os.path.join(args.data_path, f'cov{i}.npy')
+            cov = np.load(file)
+
+            cov = np.triu(cov).reshape(-1)
+            cov = cov[cov != 0]
+            self.sess_covs.append(cov)
+
+    def loaded(self, args):
+        self.sess_covs = []
+        file = os.path.join(args.data_path, 'cov9.npy')
+        cov = np.load(file)
+
+        cov = np.triu(cov).reshape(-1)
+        cov = cov[cov != 0]
+        self.sess_covs.append(cov)
 
     def prep_lda(self, data, metric=np.cov, sid=None):
         '''
@@ -342,10 +426,14 @@ class LDA_cov_sid(LDA_cov):
 
         data_cov = []
         for i in range(data.shape[0]):
-            mat = metric(data[i]) + self.sess_covs[sid[i]]
+            #mat = metric(data[i]) + self.sess_covs[sid[i]]
+            mat = metric(data[i])
             
             mat = np.triu(mat).reshape(-1)
-            data_cov.append(mat[mat != 0])
+            mat = mat[mat != 0]
+
+            feat = np.concatenate((mat, self.sess_covs[sid[i]]))
+            data_cov.append(feat)
 
         return np.array(data_cov)
 
@@ -411,7 +499,7 @@ class XGBoost_hyperopt_cov(LDA_cov, XGBoost_hyperopt):
 
 
 class LDA_average_trials(LDA):
-    def prep_lda(self, data):
+    def prep_lda(self, data, sid=None):
         '''
         Reshape data for LDA.
         '''
@@ -430,7 +518,7 @@ class LDA_average_trials(LDA):
 
 
 class LDA_cov_across_trials(LDA):
-    def prep_lda(self, data):
+    def prep_lda(self, data, sid=None):
         '''
         Reshape data for LDA.
         '''
@@ -453,7 +541,7 @@ class LDA_cov_across_trials(LDA):
 
 
 class LDA_avg_trials_cov(LDA):
-    def prep_lda(self, data):
+    def prep_lda(self, data, sid=None):
         data = data.reshape(-1, self.ts, data.shape[1])
         data = data.reshape(data.shape[0], 4, -1, data.shape[2])
         data = np.mean(data, axis=1)
@@ -475,7 +563,7 @@ class LDA_riemann(LDA):
         self.cov = XdawnCovariances(nfilter=2)
         self.tangent = TangentSpace(metric="riemann")
 
-    def prep_lda(self, data):
+    def prep_lda(self, data, sid=None):
         '''
         Reshape data for LDA.
         '''

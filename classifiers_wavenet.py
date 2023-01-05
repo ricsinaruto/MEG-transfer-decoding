@@ -549,7 +549,7 @@ class WavenetClassifierSembCov(WavenetClassifierSemb):
         self.inv_sub_dict = {v: k for k, v in self.sub_dict.items()}
 
         covs = []
-        for i in range(15):
+        for i in range(args.subjects):
             path = os.path.join(args.data_path, '..', 'cont',
                                 'subj{}_cov.npy'.format(i))
             covs.append(torch.tensor(np.load(path)))
@@ -558,7 +558,7 @@ class WavenetClassifierSembCov(WavenetClassifierSemb):
         self.covs = self.covs[:, ::20]
 
         # permute according to inv_sub_dict
-        self.covs = self.covs[[self.inv_sub_dict[i] for i in range(15)]]
+        self.covs = self.covs[[self.inv_sub_dict[i] for i in range(args.subjects)]]
 
         # linear layer going from covariance to lower dim embedding
         self.sub_emb = torch.nn.Linear(self.covs.shape[1], args.embedding_dim)
@@ -587,6 +587,44 @@ class WavenetClassifierSembCov(WavenetClassifierSemb):
         x = torch.cat([x, embs], dim=1)
 
         return super(WavenetClassifierSembCov, self).forward(x, sid)
+
+
+class WavenetClassifierSembCovD(WavenetClassifierSembCov):
+    def set_sub_dict(self):
+        self.sub_dict = {0: 3,
+                         1: 4,
+                         2: 5,
+                         3: 6,
+                         4: 0,
+                         5: 1,
+                         6: 2,
+                         7: 7,
+                         8: 8}
+
+    def __init__(self, args):
+        super(WavenetClassifierSembCov, self).__init__(args)
+
+        # going from sid to correct subject number
+        self.inv_sub_dict = self.sub_dict
+
+        covs = []
+        for i in range(args.subjects):
+            path = os.path.join(args.data_path,
+                                'cov{}.npy'.format(i))
+            cov = np.load(path)
+
+            # take triu of cov
+            cov = np.triu(cov).reshape(-1)
+            cov = cov[cov != 0]
+            covs.append(torch.tensor(cov))
+
+        self.covs = torch.stack(covs).float().cuda()
+
+        # permute according to inv_sub_dict
+        self.covs = self.covs[[self.inv_sub_dict[i] for i in range(args.subjects)]]
+
+        # linear layer going from covariance to lower dim embedding
+        self.sub_emb = torch.nn.Linear(self.covs.shape[1], args.embedding_dim)
 
 
 class WavenetClassifierSembChet(WavenetClassifierSemb):

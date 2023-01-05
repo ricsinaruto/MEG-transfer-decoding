@@ -414,6 +414,8 @@ class Experiment:
         val_accs = []
         test_accs = []
 
+        print('Val data shape: ', self.dataset.x_val_t.shape)
+
         if isinstance(self.model, LDA_average_trials):
             times = times//4
 
@@ -465,6 +467,43 @@ class Experiment:
                 f.write('\n'.join(test_accs))
 
         return val_accs
+
+    def lda_crossval(self):
+        '''
+        Loop over subjects in dataset and train lda model in cross-validation.
+        '''
+
+        # copy train and val data
+        x_train = self.dataset.x_train_t.clone()
+
+        for i in range(self.args.subjects):
+            # select i-th subject
+            self.dataset.x_train_t = x_train[self.dataset.sub_id['train'] != i].clone()
+            self.dataset.x_val_t = x_train[self.dataset.sub_id['train'] == i].clone()
+            self.dataset.x_test_t = self.dataset.x_val_t
+
+            # set correct number of train and val batches
+            bs = self.args.batch_size
+            self.dataset.bs['train'] = self.dataset.find_bs(
+                bs, self.dataset.x_train_t.shape[0])
+            self.dataset.bs['val'] = self.dataset.find_bs(
+                bs, self.dataset.x_val_t.shape[0])
+            self.dataset.bs['test'] = self.dataset.find_bs(
+                bs, self.dataset.x_test_t.shape[0])
+
+            self.dataset.train_batches = int(
+                self.dataset.x_train_t.shape[0] / self.dataset.bs['train'])
+            self.dataset.val_batches = int(
+                self.dataset.x_val_t.shape[0] / self.dataset.bs['val'])
+            self.dataset.test_batches = int(
+                self.dataset.x_test_t.shape[0] / self.dataset.bs['test'])
+
+            # train model
+            if isinstance(self.model, LDA):
+                self.lda_baseline(
+                    filewrite=False, run_test=True, save_model=True)
+            else:
+                self.train()
 
     def lda_channel(self):
         '''
@@ -564,12 +603,56 @@ class Experiment:
         '''
         Evaluate any linear classifier on the train data of another dataset.
         '''
-
+        self.model.loaded(self.args)
         path = os.path.join(self.args.result_dir, 'train.txt')
         with open(path, 'w') as f:
             x_train = self.dataset.x_train_t
 
-            acc, _, _ = self.model.eval(x_train)
+            acc, _, _ = self.model.eval(x_train, sid=self.dataset.sub_id['train'])
+            print(acc)
+            f.write(str(acc) + '\n')
+
+    def lda_eval_train_ensemble(self):
+        '''
+        Run an ensemble of individual classifiers on the train data of another dataset.
+        '''
+
+        # load models
+        models = []
+        for path in self.args.load_models:
+            with open(path, 'rb') as file:
+                model = pickle.load(file)
+                model.loaded(self.args)
+                models.append(model)
+        
+        path = os.path.join(self.args.result_dir, 'left_out_train.txt')
+        with open(path, 'w') as f:
+            x_train = self.dataset.x_train_t
+            
+            class_probs = []
+            for model in models:
+                class_prob, y_val = model.predict(x_train)
+                class_prob = np.argmax(class_prob, axis=1)
+                class_probs.append(class_prob)
+
+            class_probs = np.array(class_probs)
+            
+            # majority vote
+            y_preds = []
+            for i in range(class_probs.shape[1]):
+                y_pred = np.argmax(np.bincount(class_probs[:, i]))
+                y_preds.append(y_pred)
+
+            '''
+            # aggregate probabilities
+            class_probs = np.mean(class_probs, axis=0)
+            y_preds = np.argmax(class_probs, axis=1)
+            '''
+
+            y_preds = np.array(y_preds)
+            acc = np.mean(y_preds == y_val)
+
+            print(acc)
             f.write(str(acc) + '\n')
 
     def repeat_baseline(self):
@@ -1585,6 +1668,10 @@ def main(Args):
                 e.confusion_matrix()
             if Args.func.get('save_validation_timepoints'):
                 e.save_validation_timepoints()
+            if Args.func.get('lda_eval_train_ensemble'):
+                e.lda_eval_train_ensemble()
+            if Args.func.get('LDA_crossval'):
+                e.lda_crossval()
 
             e.save_embeddings()
 
