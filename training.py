@@ -249,6 +249,21 @@ class Experiment:
         #return losses, torch.cat(outputs), torch.cat(targets)
         return losses, None, None
 
+    def evaluate_train(self):
+        '''
+        Evaluate model on the validation dataset.
+        '''
+        self.loss.dict = {}
+        self.model.eval()
+
+        # loop over validation batches
+        for i in range(self.dataset.train_batches):
+            batch, sid = self.dataset.get_train_batch(i)
+            loss, output, target = self.model.loss(batch, i, sid, train=False)
+            self.loss.append(loss)
+
+        losses = self.loss.print('valloss')
+
     def save_validation(self):
         '''
         Save validation loss to file.
@@ -404,7 +419,7 @@ class Experiment:
         loss = mse(outputs, targets)
         print(loss.item())
 
-    def lda_baseline(self, filewrite=True, run_test=True, save_model=True):
+    def lda_baseline(self, filewrite=True, run_test=True, save_model=True, reinit=True):
         '''
         Train a separate linear model across time windows.
         '''
@@ -451,7 +466,8 @@ class Experiment:
                     pickle.dump(self.model, file)
 
             # re-initialize model
-            self.model.init_model()
+            if reinit:
+                self.model.init_model()
 
         if filewrite:
             path = os.path.join(self.args.result_dir, 'val_loss.txt')
@@ -475,12 +491,15 @@ class Experiment:
 
         # copy train and val data
         x_train = self.dataset.x_train_t.clone()
+        train_sid = self.dataset.sub_id['train'].clone()
 
         for i in range(self.args.subjects):
             # select i-th subject
-            self.dataset.x_train_t = x_train[self.dataset.sub_id['train'] != i].clone()
-            self.dataset.x_val_t = x_train[self.dataset.sub_id['train'] == i].clone()
+            self.dataset.x_train_t = x_train[train_sid != i].clone()
+            self.dataset.x_val_t = x_train[train_sid == i].clone()
             self.dataset.x_test_t = self.dataset.x_val_t
+
+            self.dataset.sub_id['train'] = train_sid[train_sid != i].clone()
 
             # set correct number of train and val batches
             bs = self.args.batch_size
@@ -501,9 +520,36 @@ class Experiment:
             # train model
             if isinstance(self.model, LDA):
                 self.lda_baseline(
-                    filewrite=False, run_test=True, save_model=True)
+                    filewrite=False, run_test=False, save_model=False)
             else:
                 self.train()
+
+    def lda_crossval_pairs(self):
+        '''
+        Loop over subjects in dataset and train lda model in cross-validation.
+        '''
+
+        # copy train and val data
+        x_train = self.dataset.x_train_t.clone()
+
+        accs = np.zeros((self.args.subjects, self.args.subjects))
+        for i in range(self.args.subjects):
+            # select i-th subject
+            self.dataset.x_train_t = x_train[self.dataset.sub_id['train'] == i].clone()
+            self.dataset.x_val_t = x_train[self.dataset.sub_id['train'] == i].clone()
+
+            # train model
+            self.lda_baseline(filewrite=False, run_test=False, save_model=False, reinit=False)
+
+            # evaluate model on all other subjects
+            for j in range(self.args.subjects):
+                x_val = x_train[self.dataset.sub_id['train'] == j].clone()
+                acc, _, _ = self.model.eval(x_val)
+                accs[i, j] = acc
+
+        # save accs
+        path = os.path.join(self.args.result_dir, 'accs.npy')
+        np.save(path, accs)
 
     def lda_channel(self):
         '''
@@ -583,17 +629,25 @@ class Experiment:
         '''
         Evaluate any linear classifier on each subject separately.
         '''
-        # load model
-        with open(self.model_path, 'rb') as file:
-            self.model = pickle.load(file)
-
-        self.model.loaded(self.args)
-
         path = os.path.join(self.args.result_dir, 'val_loss_subs.txt')
         with open(path, 'w') as f:
             for i in range(self.args.subjects):
                 inds = self.dataset.sub_id['val'] == i
                 x_val = self.dataset.x_val_t[inds, :, :]
+
+                acc, _, _ = self.model.eval(x_val)
+                print(acc)
+                f.write(str(acc) + '\n')
+
+    def lda_eval_train_subs(self):
+        '''
+        Evaluate any linear classifier on each subject separately.
+        '''
+        path = os.path.join(self.args.result_dir, 'train_loss_subs.txt')
+        with open(path, 'w') as f:
+            for i in range(self.args.subjects):
+                inds = self.dataset.sub_id['train'] == i
+                x_val = self.dataset.x_train_t[inds, :, :]
 
                 acc, _, _ = self.model.eval(x_val)
                 print(acc)
@@ -971,9 +1025,13 @@ class Experiment:
         '''
         Permutation Feature Importance (PFI) function for timesteps.
         '''
+        dataset = self.dataset.x_val_t
+        if not self.args.PFI_val:
+            dataset = self.dataset.x_train_t
+
         hw = self.args.halfwin
-        val_t = self.dataset.x_val_t.clone()
-        shuffled_val_t = self.dataset.x_val_t.clone()
+        val_t = dataset.clone()
+        shuffled_val_t = dataset.clone()
         chn = val_t.shape[1] - 1
         times = val_t.shape[2]
 
@@ -984,7 +1042,7 @@ class Experiment:
             val_func = self.kernelPFI
 
         # evaluate without channel shuffling
-        og_loss = val_func(self.dataset.x_val_t, True)
+        og_loss = val_func(dataset, True)
 
         perm_list = []
         for p in range(self.args.PFI_perms):
@@ -997,7 +1055,7 @@ class Experiment:
 
             loss_list = [og_loss]
             # slide over the epoch and always permute timesteps within a window
-            for i in range(hw, times-hw):
+            for i in range(hw, times-hw, self.args.PFI_step):
                 self.dataset.x_val_t = val_t.clone()
                 if i > hw:
                     # either permute inside or outside the window
@@ -1165,7 +1223,17 @@ class Experiment:
         '''
         Permutation Feature Importance (PFI) function for channels.
         '''
-        multi = 1 if 'eeg' in self.args.data_path else 3
+        # opm indices
+        opm_inds = []
+        for i in range(51):
+            if i < 7:
+                opm_inds.append(np.array([i*3, i*3+1, i*3+2]))
+            elif i == 7:
+                opm_inds.append(np.array([i*3, i*3+1]))
+            else:
+                opm_inds.append(np.array([i*3-1, i*3, i*3+1]))
+
+        multi = self.args.chn_multi
         dataset = self.dataset.x_val_t
         if not self.args.PFI_val:
             dataset = self.dataset.x_train_t
@@ -1215,6 +1283,9 @@ class Experiment:
                         chn_idx = np.append(np.append(a, a+1), a+2)
                     else:
                         chn_idx = a
+
+                    if 'opm' in self.args.data_path:
+                        chn_idx = opm_inds[i]
 
                     # shuffle closest k channels
                     if self.args.PFI_inverse:
@@ -1672,6 +1743,12 @@ def main(Args):
                 e.lda_eval_train_ensemble()
             if Args.func.get('LDA_crossval'):
                 e.lda_crossval()
+            if Args.func.get('lda_crossval_pairs'):
+                e.lda_crossval_pairs()
+            if Args.func.get('lda_eval_train_subs'):
+                e.lda_eval_train_subs()
+            if Args.func.get('evaluate_train'):
+                e.evaluate_train()
 
             e.save_embeddings()
 

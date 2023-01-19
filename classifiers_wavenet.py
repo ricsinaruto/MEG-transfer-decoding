@@ -627,6 +627,32 @@ class WavenetClassifierSembCovD(WavenetClassifierSembCov):
         self.sub_emb = torch.nn.Linear(self.covs.shape[1], args.embedding_dim)
 
 
+class WavenetClassifierSembCovD7(WavenetClassifierSembCovD):
+    def set_sub_dict(self):
+        self.sub_dict = {0: 3,
+                         1: 4,
+                         2: 5,
+                         3: 6,
+                         4: 0,
+                         5: 1,
+                         6: 2}
+
+    def loaded(self, args):
+        super(WavenetClassifierSembCovD7, self).loaded(args)
+        self.set_sub_dict()
+
+        covs = []
+        path = os.path.join(args.data_path, '..', 'cov4.npy')
+        cov = np.load(path)
+
+        # take triu of cov
+        cov = np.triu(cov).reshape(-1)
+        cov = cov[cov != 0]
+        covs.append(torch.tensor(cov))
+
+        self.covs = torch.stack(covs).float().cuda()
+
+
 class WavenetClassifierSembChet(WavenetClassifierSemb):
     '''
     Multi-subject Wavenet classifier using WavenetSimpleChetSemb.

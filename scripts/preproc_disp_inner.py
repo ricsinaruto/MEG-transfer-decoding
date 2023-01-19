@@ -30,8 +30,9 @@ event_dict = {#'event_off':1,
 # NEED TO INTERPOLATE BAD CHANNELS
 
 dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/oslpy'
-outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/inner_speech_sub_2s'
-files = files = [f for f in os.listdir(dataset_path) if 'raw.fif' in f]
+outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/inner_think_sub_2s'
+#files = [f for f in os.listdir(dataset_path) if 'raw.fif' in f]
+files = ['task_part1_rc_raw_tsss_mc_raw.fif']
 for f in files:
     raw = mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=True)
 
@@ -39,11 +40,12 @@ for f in files:
     event_c = np.array([e[2] for e in events])
     event_t = np.array([e[0] for e in events])
 
-    #print(event_c[:20])
+    print(event_c[:40])
     count1 = 0
     count2 = 0
     new_events = []
     for i, (et, ec) in enumerate(zip(event_t, event_c)):
+        '''
         if ec < 7 and ec > 1:
             count1 += 1
             if event_c[i+2] == 8:
@@ -62,8 +64,9 @@ for f in files:
                 new_events.append(np.array([event_t[i+5], 0, ec]))
             else:
                 print('error4')
+        '''
 
-        elif ec < 16 and ec > 10:
+        if ec < 16 and ec > 10:
             count2 += 1
             split_events = event_c[i-18:i-4]
             #print(split_events)

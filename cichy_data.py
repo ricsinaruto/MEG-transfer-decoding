@@ -216,7 +216,7 @@ class CichyData(MRCData):
             min_trials = 1000000
             dataset = []
 
-            # loop over 118 conditions
+            # loop over conditions
             for c in range(args.num_classes):
                 cond_path = os.path.join(path, 'cond' + str(c))
                 files = os.listdir(cond_path)
@@ -224,10 +224,12 @@ class CichyData(MRCData):
                 if len(files) < min_trials:
                     min_trials = len(files)
 
+            for c in range(args.num_classes):
+                cond_path = os.path.join(path, 'cond' + str(c))
                 trials = []
                 # loop over trials within a condition
-                for f in files:
-                    trial = np.load(os.path.join(cond_path, f))
+                for i in range(min_trials):
+                    trial = np.load(os.path.join(cond_path, f'trial{i}.npy'))
                     trials.append(trial)
 
                 dataset.append(np.array(trials))
@@ -319,6 +321,29 @@ class CichyData(MRCData):
         return x
 
 
+class CichyDataDISP(CichyData):
+    def splitting(self, dataset, args):
+        split_l = int(args.split[0] * dataset.shape[1])
+        split_h = int(args.split[1] * dataset.shape[1])
+        x_val = dataset[:, split_l:split_h, :, :]
+
+        x_train_lower, x_train_upper = None, None
+        if split_l > 1:
+            x_train_lower = dataset[:, :split_l-1, :, :]
+        if split_h < dataset.shape[1] - 1:
+            x_train_upper = dataset[:, split_h+1:, :, :]
+
+        if x_train_lower is not None and x_train_upper is not None:
+            x_train = np.concatenate((x_train_lower, x_train_upper),
+                                     axis=1)
+        elif x_train_lower is not None:
+            x_train = x_train_lower
+        elif x_train_upper is not None:
+            x_train = x_train_upper
+
+        return x_train, x_val, x_val
+
+
 class CichyDataTrialNorm(CichyData):
     def normalize(self, x_train, x_val, x_test):
         '''
@@ -327,10 +352,17 @@ class CichyDataTrialNorm(CichyData):
         # standardize dataset along channels
         self.norm = StandardScaler()
 
+        resample = int(self.args.original_sr/self.args.sr_data)
+
         # expand shape to trials x timesteps x channels
         x_train = x_train.reshape(-1, self.timesteps, x_train.shape[1])
         x_val = x_val.reshape(-1, self.timesteps, x_val.shape[1])
         x_test = x_test.reshape(-1, self.timesteps, x_test.shape[1])
+
+        x_train = x_train[:, ::resample, :]
+        x_val = x_val[:, ::resample, :]
+        x_test = x_test[:, ::resample, :]
+        self.timesteps = x_train.shape[1]
 
         # squeeze to trials x (timesteps x channels)
         x_train = x_train.reshape(x_train.shape[0], -1)
@@ -339,9 +371,15 @@ class CichyDataTrialNorm(CichyData):
 
         self.norm.fit(x_train)
         print(x_train.shape)
-        x_train = self.norm.transform(x_train)
-        x_val = self.norm.transform(x_val)
-        x_test = self.norm.transform(x_test)
+
+        #x_train = self.norm.transform(x_train)
+        #x_val = self.norm.transform(x_val)
+        #x_test = self.norm.transform(x_test)
+
+        mean = np.mean(x_train, axis=0)
+        x_train = (x_train - mean)/1e-6
+        x_val = (x_val - mean)/1e-6
+        x_test = (x_test - mean)/1e-6
 
         # expand shape to trials x timesteps x channels
         x_train = x_train.reshape(x_train.shape[0], self.timesteps, -1)
@@ -354,6 +392,33 @@ class CichyDataTrialNorm(CichyData):
         x_test = x_test.reshape(-1, x_test.shape[2])
 
         return x_train.T, x_val.T, x_test.T
+
+    def create_examples(self, x, disconts):
+        '''
+        Create examples with labels.
+        '''
+
+        # expand shape to trials
+        x = x.transpose(1, 0)
+        x = x.reshape(self.args.num_classes, -1, self.timesteps, x.shape[1])
+        x = x.transpose(0, 1, 3, 2)
+
+        # downsample data if needed
+        timesteps = x.shape[3]
+        trials = x.shape[1]
+
+        # create labels, and put them in the last channel of the data
+        array = []
+        labels = np.ones((trials, 1, timesteps))
+        for c in range(x.shape[0]):
+            array.append(np.concatenate((x[c, :, :, :], labels * c), axis=1))
+
+        x = np.array(array).reshape(-1, x.shape[2] + 1, timesteps)
+        return x
+
+
+class CichyDataDISPTrialNorm(CichyDataDISP, CichyDataTrialNorm):
+    pass
 
 
 class CichyDataCHN(CichyData):

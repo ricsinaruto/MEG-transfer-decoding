@@ -19,25 +19,28 @@ for ind, (et, ec) in enumerate(zip(event_t[1:-1], event_c[1:-1])):
 
     plus = event_t[i+1] - et
     minus = et - event_t[i-1]
-    if ec < 7 and ec > 1 and plus > 5 and minus > 5:
-        count1 += 1
-        if event_c[i+2] == 8:
-            new_events.append(np.array([event_t[i+2], 0, ec]))
-        else:
-            print('error1')
-        if event_c[i+3] == 8:
-            new_events.append(np.array([event_t[i+3], 0, ec]))
-        else:
-            print('error2')
-        if event_c[i+4] == 8:
-            new_events.append(np.array([event_t[i+4], 0, ec]))
-        else:
-            print('error3')
-        if event_c[i+5] == 8:
-            new_events.append(np.array([event_t[i+5], 0, ec]))
-        else:
-            print('error4')
 
+    if ec < 7 and ec > 1 and plus > 5 and minus > 5:
+        if False:
+            count1 += 1
+            if event_c[i+2] == 8:
+                new_events.append(np.array([event_t[i+2], 0, ec]))
+            else:
+                print('error1')
+            if event_c[i+3] == 8:
+                new_events.append(np.array([event_t[i+3], 0, ec]))
+            else:
+                print('error2')
+            if event_c[i+4] == 8:
+                new_events.append(np.array([event_t[i+4], 0, ec]))
+            else:
+                print('error3')
+            if event_c[i+5] == 8:
+                new_events.append(np.array([event_t[i+5], 0, ec]))
+            else:
+                print('error4')
+
+    # elif
     elif (event_t[i+1] - et) < 5 and ec > 1:
         ec += event_c[i+1]
         think_trial = True
@@ -82,7 +85,7 @@ print(count2)
 
 new_events = np.array(new_events)
 
-outdir = '/well/woolrich/projects/disp_csaky/opm_lukas/sub_innerspeech1_40hz_mark/'
+outdir = '/well/woolrich/projects/disp_csaky/opm_lukas/sub_innerspeech1_40hz_think'
 path = '/well/woolrich/projects/disp_csaky/opm_lukas/raw_preproc_mark_mfc.fif'
 raw = mne.io.read_raw_fif(path, preload=True)
 
@@ -102,7 +105,8 @@ for epoch, event in zip(epochs, epochs.events):
     data = epoch.T.astype(np.float32)
 
     event_id = event[-1] - 2
-    os.makedirs(f"{outdir}/cond{event_id}")
+    if not os.path.exists(f"{outdir}/cond{event_id}"):
+        os.makedirs(f"{outdir}/cond{event_id}")
 
     n_trials = int(len(os.listdir(f"{outdir}/cond{event_id}")))
     np.save(f"{outdir}/cond{event_id}/trial{n_trials}.npy", data)

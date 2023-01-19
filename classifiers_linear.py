@@ -81,18 +81,30 @@ class LDA:
 
         self.load_whiten(args)
         
-    def run(self, x_train, x_val, window=None, sid_val=None, sid_train=None):
+    def run(self, x_train, x_val_, window=None, sid_val=None, sid_train=None):
         '''
         Transform data, then train and evaluate LDA.
         '''
         self.window = window
         self.sid_val = sid_val
         self.sid_train = sid_train
-        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val)
+        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val_)
 
         print(x_train.shape)
         # fit LDA
         self.model.fit(x_train, y_train)
+
+        # accuracy for each cross
+        '''
+        for i in range(4):
+            acc = self.model.score(x_val[i::2], y_val[i::2])
+            print('Cross %d: %.2f' % (i, acc))
+        '''
+
+        # save xval data
+        #np.save(self.args.result_dir + '/xval_cross1.npy', x_val_[1::4].cpu().numpy())
+        # save xval data
+        #np.save(self.args.result_dir + '/xval_cross2.npy', x_val_[2::4].cpu().numpy())
 
         # validation accuracy
         acc = self.model.score(x_val, y_val)
@@ -159,6 +171,7 @@ class LDA:
                 x_val = self.norm.transform(x_val)
 
         x_val = self.prep_lda(x_val, sid=sid)
+
         return self.model.score(x_val, y_val), x_val, y_val
 
     def prepare(self, data):
@@ -202,6 +215,37 @@ class LDA:
 
         if self.window is not None:
             data = data[:, self.window[0]:self.window[1], :]
+        data = data.reshape(data.shape[0], -1)
+
+        return data
+
+
+class LDA_invpca(LDA):
+    def prep_lda(self, data, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        data = data[:, :, -self.args.whiten:]
+
+        if self.window is not None:
+            data = data[:, self.window[0]:self.window[1], :]
+        data = data.reshape(data.shape[0], -1)
+
+        return data
+
+
+class LDA_tp(LDA):
+    def prep_lda(self, data, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+
+        if self.window is not None:
+            data = data[:, self.window[0]:self.window[1], :]
+
+        data = data.transpose(0, 2, 1)
         data = data.reshape(data.shape[0], -1)
 
         return data
@@ -322,6 +366,176 @@ class LDA_cov(LDA):
         return np.array(data_cov)
 
 
+class LDA_cov_featnorm(LDA_cov):
+    def normalize(self, x_train, x_val):
+        '''
+        Normalize data separately for each subject according to sid.
+        '''
+        x_train_norm = []
+        x_val_norm = []
+        self.means = []
+        self.stds = []
+        for i in range(self.sid_train.max()+1):
+            mean = x_train[self.sid_train == i].mean(axis=0)
+            std = x_train[self.sid_train == i].std(axis=0)
+
+            self.means.append(mean)
+            self.stds.append(std)
+
+            x_train_norm.append(
+                (x_train[self.sid_train == i] - mean))
+            x_val_norm.append(
+                (x_val[self.sid_val == i] - mean))
+            
+        x_train_norm = np.concatenate(x_train_norm)
+        x_val_norm = np.concatenate(x_val_norm)
+
+        return x_train_norm, x_val_norm
+        
+    def run(self, x_train, x_val_, window=None, sid_val=None, sid_train=None):
+        '''
+        Transform data, then train and evaluate LDA.
+        '''
+        self.window = window
+        self.sid_val = sid_val.cpu().numpy()
+        self.sid_train = sid_train.cpu().numpy()
+        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val_)
+
+        x_train, x_val = self.normalize(x_train, x_val)
+
+        print(x_train.shape)
+        # fit LDA
+        self.model.fit(x_train, y_train)
+
+        # validation accuracy
+        acc = self.model.score(x_val, y_val)
+
+        return acc, None, None
+
+    def eval(self, x_val, window=None, sid=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+        if sid is not None:
+            sid_val = sid.cpu().numpy()
+        else:
+            sid_val = self.sid_val
+
+        if not self.args.load_conv:
+            x_val = self.pca.transform(x_val)
+            if self.lda_norm:
+                x_val = self.norm.transform(x_val)
+
+        x_val = self.prep_lda(x_val, sid=sid)
+
+        x_val_norm = []
+        for i in range(self.sid_train.max()+1):
+            mean = self.means[i]
+            x_val_norm.append((x_val[sid_val == i] - mean))
+            
+        x_val = np.concatenate(x_val_norm)
+
+        return self.model.score(x_val, y_val), x_val, y_val
+
+
+class LDA_sessnorm(LDA):
+    def run(self, x_train, x_val_, window=None, sid_val=None, sid_train=None):
+        '''
+        Transform data, then train and evaluate LDA.
+        '''
+        self.window = window
+        self.sid_val = sid_val.cpu().numpy()
+        self.sid_train = sid_train.cpu().numpy()
+        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val_)
+
+        x_train, x_val = self.normalize(x_train, x_val)
+
+        print(x_train.shape)
+        # fit LDA
+        self.model.fit(x_train, y_train)
+
+        # validation accuracy
+        acc = self.model.score(x_val, y_val)
+
+        return acc, None, None
+
+    def normalize(self, x_train, x_val):
+        '''
+        Normalize data separately for each subject according to sid.
+        '''
+        x_train_norm = []
+        x_val_norm = []
+        self.means = []
+        self.stds = []
+        for i in range(self.sid_train.max()+1):
+            mean = x_train[self.sid_train == i].mean(axis=0)
+            std = x_train[self.sid_train == i].std(axis=0)
+
+            self.means.append(mean)
+            self.stds.append(std)
+
+            x_train_norm.append(
+                (x_train[self.sid_train == i] - mean) / std)
+            x_val_norm.append(
+                (x_val[self.sid_val == i] - mean) / std)
+            
+        x_train_norm = np.concatenate(x_train_norm)
+        x_val_norm = np.concatenate(x_val_norm)
+
+        return x_train_norm, x_val_norm
+
+    def eval(self, x_val, window=None, sid=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+        if sid is not None:
+            sid_val = sid.cpu().numpy()
+        else:
+            sid_val = self.sid_val
+
+        if not self.args.load_conv:
+            x_val = self.pca.transform(x_val)
+            if self.lda_norm:
+                x_val = self.norm.transform(x_val)
+
+        x_val = self.prep_lda(x_val, sid=sid)
+
+        x_val_norm = []
+        for i in range(self.sid_train.max()+1):
+            mean = self.means[i]
+            std = self.stds[i]
+            x_val_norm.append((x_val[sid_val == i] - mean) / std)
+            
+        x_val = np.concatenate(x_val_norm)
+
+        return self.model.score(x_val, y_val), x_val, y_val
+
+
+class LDA_cov_featnorm_crossval(LDA_cov_featnorm):
+    def normalize(self, x_train, x_val):
+        '''
+        Normalize data separately for each subject according to sid.
+        '''
+        x_train_norm = []
+        
+        # loop through the set of sid's in the training set
+        for i in list(set(self.sid_train)):
+            mean = x_train[self.sid_train == i].mean(axis=0)
+
+            x_train_norm.append(
+                (x_train[self.sid_train == i] - mean))
+            
+        x_train_norm = np.concatenate(x_train_norm)
+
+        x_val_norm = x_val - x_val.mean(axis=0)
+
+        return x_train_norm, x_val_norm
+
+
 class LDA_cov_shifted(LDA_cov):
     def prep_lda(self, data, metric=np.cov, sid=None):
         '''
@@ -436,6 +650,22 @@ class LDA_cov_sid(LDA_cov):
             data_cov.append(feat)
 
         return np.array(data_cov)
+
+
+class LDA_cov_sid7(LDA_cov_sid):
+    def __init__(self, args):
+        super().__init__(args)
+
+        self.sess_covs = []
+        # load session covariances as numpy arrays
+        # ordered as sid-s
+        for i in [3, 4, 5, 6, 0, 1, 2]:
+            file = os.path.join(args.data_path, f'cov{i}.npy')
+            cov = np.load(file)
+
+            cov = np.triu(cov).reshape(-1)
+            cov = cov[cov != 0]
+            self.sess_covs.append(cov)
 
 
 class LDA_corr(LDA_cov):
@@ -783,8 +1013,16 @@ class LogisticRegL1(LDA):
     def init_model(self):
         self.model = LogisticRegression(multi_class='ovr',
                                         penalty='l1',
-                                        solver='liblinear')
+                                        solver='liblinear',
+                                        C=100000)
         self.fit_pca = False
+
+
+class Lasso_cov_featnorm(LDA_cov_featnorm, LogisticRegL1):
+    '''
+    Lasso Regression model using the functionalities of the LDA class.
+    '''
+    pass
 
 
 class linearSVM(LDA):

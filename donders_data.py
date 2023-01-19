@@ -127,20 +127,29 @@ class DondersData:
         val_ep = np.concatenate(tuple(val_eps))
         test_ep = np.concatenate(tuple(test_eps))
 
-        shuffled = list(range(train_ep.shape[0]))
-        random.shuffle(shuffled)
-        self.x_train_t = train_ep[shuffled, :, :]
-        self.sub_id['train'] = np.array(self.sub_id['train'])[shuffled]
+        if args.shuffle:
+            shuffled = list(range(train_ep.shape[0]))
+            random.shuffle(shuffled)
+            self.x_train_t = train_ep[shuffled, :, :]
+            self.sub_id['train'] = np.array(self.sub_id['train'])[shuffled]
 
-        shuffled = list(range(val_ep.shape[0]))
-        random.shuffle(shuffled)
-        self.x_val_t = val_ep[shuffled, :, :]
-        self.sub_id['val'] = np.array(self.sub_id['val'])[shuffled]
+            shuffled = list(range(val_ep.shape[0]))
+            random.shuffle(shuffled)
+            self.x_val_t = val_ep[shuffled, :, :]
+            self.sub_id['val'] = np.array(self.sub_id['val'])[shuffled]
 
-        shuffled = list(range(test_ep.shape[0]))
-        random.shuffle(shuffled)
-        self.x_test_t = test_ep[shuffled, :, :]
-        self.sub_id['test'] = np.array(self.sub_id['test'])[shuffled]
+            shuffled = list(range(test_ep.shape[0]))
+            random.shuffle(shuffled)
+            self.x_test_t = test_ep[shuffled, :, :]
+            self.sub_id['test'] = np.array(self.sub_id['test'])[shuffled]
+        else:
+            self.x_train_t = train_ep
+            self.x_val_t = val_ep
+            self.x_test_t = test_ep
+
+            self.sub_id['train'] = np.array(self.sub_id['train'])
+            self.sub_id['val'] = np.array(self.sub_id['val'])
+            self.sub_id['test'] = np.array(self.sub_id['test'])
 
         print('Good samples: ', sum([x.shape[1] for x in x_trains + x_vals]),
               flush=True)
