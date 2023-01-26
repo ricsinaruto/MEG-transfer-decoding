@@ -249,6 +249,27 @@ class Experiment:
         #return losses, torch.cat(outputs), torch.cat(targets)
         return losses, None, None
 
+    def classify(self):
+        self.model.eval()
+
+        accs = []
+
+        batches, _ = self.dataset.get_val_batch(0)
+
+        batch = {'inputs': [], 'targets': [], 'condition': [], 'sid': []}
+        # loop over validation batches
+        for i in range(0, batches['sid'].shape[0], self.args.batch_size):
+            
+            for k in batch.keys():
+                batch[k] = batches[k][i:i+self.args.batch_size]
+
+            acc = self.model.classify(batch)
+            accs.append(acc.double())
+
+        accs = torch.cat(accs, dim=0)
+        accs = accs.mean(dim=0)
+        print(accs)
+
     def evaluate_train(self):
         '''
         Evaluate model on the validation dataset.
@@ -1749,6 +1770,8 @@ def main(Args):
                 e.lda_eval_train_subs()
             if Args.func.get('evaluate_train'):
                 e.evaluate_train()
+            if Args.func.get('classify'):
+                e.classify()
 
             e.save_embeddings()
 

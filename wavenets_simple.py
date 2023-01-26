@@ -15,6 +15,8 @@ from scipy.signal import welch
 from scipy import signal
 from scipy.io import savemat
 
+from cichy_data import mulaw_inv
+
 
 class WavenetSimple(Module):
     '''
@@ -743,16 +745,121 @@ class ConvAR(WavenetSimple):
         self.conv = Conv1d(
             ch, ch, kernel_size=args.rf, groups=args.groups)
 
+    def encode(self, x, maxabs, mu=255):
+        '''
+        Encode data using mu-law companding.
+        '''
+        x = maxabs.transform(x.T).T
+        x = np.clip(x, -1, 1)
+
+        shape = x.shape
+
+        x = x.reshape(-1)
+        x = np.sign(x)*np.log(1+mu*np.abs(x))/np.log(1+mu)
+
+        digitized = ((x + 1) / 2 * mu+0.5).astype(np.int32)
+
+        return digitized
+
+    def repeat_metrics(self, targets, chn, trials, ts):
+        targets = targets.reshape(chn, -1)
+        targets = targets.reshape(chn, trials, ts)
+        targets_1 = targets[:, :, 1:].reshape(-1)
+        targets_2 = targets[:, :, :-1].reshape(-1)
+        mse_shifted = self.criterion(mulaw_inv(targets_1),
+                                     mulaw_inv(targets_2))
+
+        acc_shifted = (targets_1 == targets_2).sum() / targets_1.shape[0]
+
+        return mse_shifted, acc_shifted
+
     def loss(self, data, i=0, sid=None, train=True, criterion=None):
         preds = self.conv(data['inputs'])
+        targets = data['targets'][:, :, -preds.shape[2]:]
 
-        loss = self.criterion(preds, data['targets'][:, :, -preds.shape[2]:])
+        loss = self.criterion(preds, targets)
 
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss}
 
-        return losses
+        if not train:
+            preds = preds.detach().cpu().numpy()
+            targets = targets.detach().cpu().numpy()
+            trials = targets.shape[0]
+            chn = targets.shape[1]
+            ts = targets.shape[2]
+
+            # reshape to 2d
+            preds = preds.transpose(1, 0, 2).reshape(preds.shape[1], -1)
+            targets = targets.transpose(1, 0, 2).reshape(targets.shape[1], -1)
+
+            # quantize preds and targets
+            preds256 = self.encode(preds, data['maxabs'])
+            targets256 = self.encode(targets, data['maxabs'])
+
+            preds8 = self.encode(preds, data['maxabs'], mu=7)
+            targets8 = self.encode(targets, data['maxabs'], mu=7)
+
+            preds32 = self.encode(preds, data['maxabs'], mu=31)
+            targets32 = self.encode(targets, data['maxabs'], mu=31)
+
+            # compute accuracy
+            acc256 = (preds256 == targets256).sum() / preds256.shape[0]
+            acc8 = (preds8 == targets8).sum() / preds8.shape[0]
+            acc32 = (preds32 == targets32).sum() / preds32.shape[0]
+
+            # convert back to tensors
+            preds256 = torch.Tensor(preds256).cuda()
+            targets256 = torch.Tensor(targets256).cuda()
+            targets32 = torch.Tensor(targets32).cuda()
+
+            preds8 = torch.Tensor(preds8).cuda()
+            targets8 = torch.Tensor(targets8).cuda()
+
+            mse8 = self.criterion(mulaw_inv(preds8), mulaw_inv(targets8))
+            mse256 = self.criterion(mulaw_inv(preds256), mulaw_inv(targets256))
+
+            losses['trainloss/Train accuracy 8q: '] = acc8
+            losses['valloss/Validation accuracy 8q: '] = acc8
+            losses['trainloss/Train accuracy 256q: '] = acc256
+            losses['valloss/Validation accuracy 256q: '] = acc256
+            losses['valloss/Validation accuracy 32q: '] = acc32
+            losses['trainloss/Training MSE 8q: '] = mse8
+            losses['valloss/Validation MSE 8q: '] = mse8
+            losses['trainloss/Training MSE 256q: '] = mse256
+            losses['valloss/Validation MSE 256q: '] = mse256
+
+            # compute the mse256 of repeating shifting timestep
+            mse_shifted, acc_shifted = self.repeat_metrics(
+                targets256, chn, trials, ts)
+            losses['valloss/repeat_mse256: '] = mse_shifted
+            losses['valloss/repeat_acc256: '] = acc_shifted
+
+            mse_shifted, acc_shifted = self.repeat_metrics(
+                targets8, chn, trials, ts)
+            losses['valloss/repeat_acc8: '] = acc_shifted
+
+            mse_shifted, acc_shifted = self.repeat_metrics(
+                targets32, chn, trials, ts)
+            losses['valloss/repeat_acc32: '] = acc_shifted
+
+            preds256 = preds256.reshape(chn, -1)
+            preds256 = preds256.reshape(chn, trials, ts)
+            preds256 = mulaw_inv(preds256).detach().cpu().numpy()
+            targets = targets.reshape(chn, -1)
+            targets = targets.reshape(chn, trials, ts)
+            targets256 = mulaw_inv(targets256).detach().cpu().numpy()
+
+            train = 'train' if train else 'val'
+            # save predictions and targets
+            path = os.path.join(self.args.result_dir, train + f'preds{i}.npy')
+            np.save(path, preds256)
+            path = os.path.join(
+                self.args.result_dir, train + f'targets{i}.npy')
+            np.save(path, targets256)
+
+        return losses, None, None
 
 
 class WavenetSimpleUniToMulti(WavenetSimple):

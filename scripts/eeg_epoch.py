@@ -24,7 +24,7 @@ for i in range(2, 12):
     sid = str(i)
     fif_name = "preproc_preproc_raw.fif"
     base = "/gpfs2/well/woolrich/projects/disp_csaky/eeg/"
-    dataset_path = base + f"session{i}/preproc1_20hz_noica/oslpy/" + fif_name
+    dataset_path = base + f"session{i}/preproc1_40hz_noica/oslpy/" + fif_name
 
     # load raw data
     raws.append(mne.io.read_raw_fif(dataset_path, preload=True))
@@ -110,13 +110,13 @@ for raw in raws:
     ep = mne.Epochs(raw,
                     new_events,
                     event_id=epoch_event_id,
-                    tmin=0,
-                    tmax=4,
+                    tmin=-0.5,
+                    tmax=6,
                     baseline=None,
                     picks=['eeg'],
                     reject=None,
                     preload=True,
-                    reject_by_annotation=True)
+                    reject_by_annotation=False)
     epochs.append(ep)
 
 '''
@@ -146,7 +146,7 @@ for sess, ep in enumerate(epochs):
 
 
 for i, session in enumerate(epochs):
-    outdir = base + f"preproc1_20hz_noica/think_inner_speech_4s/sub" + str(i)
+    outdir = base + f"preproc1_40hz_noica/thinkall_inner_speech_5.5s/sub" + str(i)
     for epoch, event in zip(session, session.events):
         data = epoch.T.astype(np.float32)
 

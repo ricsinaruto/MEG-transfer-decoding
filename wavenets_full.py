@@ -328,8 +328,8 @@ class WavenetFull(WavenetSimple):
         targets = targets.reshape(-1)
         logits = logits.reshape(-1, logits.shape[-1])
 
-        losses = self.criterion(logits, targets)
-        loss = torch.mean(losses)
+        all_loss = self.criterion(logits, targets)
+        loss = torch.mean(all_loss)
 
         acc, preds = accuracy(logits, targets)
         acc = torch.mean(acc.float())
@@ -342,24 +342,6 @@ class WavenetFull(WavenetSimple):
 
         #mse = acc
 
-        if i == 0 and self.save_preds:
-            pred_cont = pred_cont.detach().cpu().numpy()
-            target_cont = target_cont.detach().cpu().numpy()
-            losses = losses.detach().cpu().numpy()
-
-            pred_cont = pred_cont.reshape(shape)
-            target_cont = target_cont.reshape(shape)
-            losses = losses.reshape(shape)
-
-            train = 'train' if train else 'val'
-            # save predictions and targets
-            path = os.path.join(self.args.result_dir, train + 'preds.npy')
-            np.save(path, pred_cont)
-            path = os.path.join(self.args.result_dir, train + 'targets.npy')
-            np.save(path, target_cont)
-            path = os.path.join(self.args.result_dir, train + 'losses.npy')
-            np.save(path, losses)
-
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss,
@@ -367,6 +349,34 @@ class WavenetFull(WavenetSimple):
                   'trainloss/Train accuracy: ': acc,
                   'trainloss/Training MSE: ': mse,
                   'valloss/Validation MSE: ': mse}
+
+        if self.save_preds:
+            pred_cont = pred_cont.detach().cpu().numpy()
+            target_cont = target_cont.detach().cpu().numpy()
+            all_loss = all_loss.detach().cpu().numpy()
+
+            pred_cont = pred_cont.reshape(shape)
+            target_cont = target_cont.reshape(shape)
+            all_loss = all_loss.reshape(shape)
+
+            targets = targets.reshape(shape)
+            acc = torch.eq(targets[:, :, 1:], targets[:, :, :-1])
+            losses['valloss/repeat acc: '] = torch.mean(acc.float())
+
+            train = 'train' if train else 'val'
+            # save predictions and targets
+            path = os.path.join(self.args.result_dir, train + f'preds{i}.npy')
+            np.save(path, pred_cont)
+            path = os.path.join(self.args.result_dir, train + f'targets{i}.npy')
+            np.save(path, target_cont)
+            path = os.path.join(self.args.result_dir, train + f'losses{i}.npy')
+            np.save(path, all_loss)
+
+            # save data['sid']
+            path = os.path.join(self.args.result_dir, train + f'sid{i}.npy')
+            np.save(path, data['sid'].cpu().numpy())
+
+        
 
         #return losses, pred_cont.reshape(shape), target_cont.reshape(shape)
         return losses, None, None
@@ -390,42 +400,55 @@ class WavenetFull(WavenetSimple):
                    = log sum_y exp(log p(X0|Y=y)+log p(X1|X0,Y=y)+...+log p(XT|XT-1...X0,Y=y) + log p(Y=y))
         this can be conveniently computed using torch.logsumexp
         '''
-        Y = self.cond_channels
-        Q = self.quantization_levels
-        B, T = data.shape
-        log_py = torch.log(torch.tensor(1.0 / 10))
+        nc = self.args.num_classes
+        Q = self.quant_levels
+        B, C, T = data['inputs'].shape
+        log_py = torch.log(torch.tensor(1.0 / nc))
 
-        # All possible one-hot conditions
-        y_conds = (
-            (F.one_hot(torch.arange(0, Y, 1), num_classes=Y).permute(0, 1).view(Y, Y, 1))
-            .to(data.device)
-            .float()
-        )
+        data['condition'] = data['condition'].squeeze()
+        cond_inds = data['condition'] > 0
+        cond_inds[:, :self.args.rf] = False
+
+        logits_ts = self.args.sample_rate - self.args.rf + 1
+        horizon = self.args.sr_data
+        targets = data['targets'][:, :, -logits_ts:]
+        targets = targets[:, :, :horizon].reshape(-1)
 
         log_pxys = []
         # For each class
-        for y in range(10):
+        for y in range(1, nc):
+            # replace condition with current label
+            data['condition'] = data['condition'].squeeze()
+            data['condition'][cond_inds] = y
+            data['condition'] = data['condition'].unsqueeze(1)
+
             # First, compute p(X|Y=y)
-            logits, _ = self.forward(x=data, c=y_conds[y : y + 1])  # (B,Q,T)
-            log_px_y = F.log_softmax(logits / tau, 1)
-            # Note, wavenet predictions for the i-th sample is the distribution p(X_(i+1)|X_<=i, Y=y).
-            # To compute get the value p(X=x|Y=y) we need to shift the image by one sample. Effectively,
-            # we are not including p(X0).
-            log_px_y = log_px_y[..., :-1]
-            log_px_y = log_px_y.permute(0, 2, 1).reshape(-1, Q)  # (B*T,Q)
-            log_px_y = log_px_y[torch.arange(B * (T - 1)), data[:, 1:].reshape(-1)].view(
-                B, (T - 1)
-            )  # (B,T)
-            log_pxy = log_px_y[:, :data.shape[1]].sum(-1) + log_py
-            log_pxys.append(log_pxy.clone())
+            logits = self.forward(data)
+            logits = logits[:, :, :horizon, :]
+
+            T = logits.shape[2]
+            log_px_y = F.log_softmax(logits / tau, -1)
+            log_px_y = log_px_y.reshape(-1, Q)
+            log_px_y = log_px_y[torch.arange(log_px_y.shape[0]), targets]
+            log_px_y = log_px_y.view(B, C*T)
+
+            log_pxy = log_px_y.sum(-1) + log_py
+            log_pxys.append(log_pxy.detach())
             del logits
+
         return torch.stack(log_pxys, -1)
 
     def classify(self, data):
+        baseline = self.args.sr_data // 10 + 10
+        targets = data['condition'][:, 0, self.args.rf+baseline].clone()
+
         log_pxys = self.compute_log_pxy(data)
         log_px = torch.logsumexp(log_pxys, -1)
-        py_x = torch.exp(log_pxys - log_px.unsqueeze(-1))
-        return py_x, data['targets']
+        log_py_x = log_pxys - log_px.unsqueeze(-1)
+
+        acc = log_py_x.argmax(1) == targets
+
+        return acc
 
 
 class WavenetFullEmbPca(WavenetFull):
@@ -505,6 +528,18 @@ class WavenetFullTest(WavenetFullEmbPca):
 
         self.save_preds = True
 
+    def get_cond(self, data):
+        cond = None
+        if self.args.cond_channels > 0:
+            # cond: B x E x T
+            cond_ind = data['condition']
+            cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
+
+            # set elements of cond to 0 where cond_ind is 0
+            cond = cond * (cond_ind > 0).float()
+
+        return cond
+
     def forward(self, data, causal_pad=False):
         """Computes logits and encoding results from observations.
         Args:
@@ -519,14 +554,7 @@ class WavenetFullTest(WavenetFullEmbPca):
         """
         x = data['inputs']
 
-        cond = None
-        if self.args.cond_channels > 0:
-            # cond: B x E x T
-            cond_ind = data['condition']
-            cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
-
-            # set elements of cond to 0 where cond_ind is 0
-            cond = cond * (cond_ind > 0).float()
+        cond = self.get_cond(data)
 
         # apply embedding to inputs and squeeze embeddings to last dim
         x = self.quant_emb(x)
@@ -562,7 +590,9 @@ class WavenetFullTest(WavenetFullEmbPca):
 class WavenetFullTestSemb(WavenetFullTest):
     def build_model(self, args):
         super().build_model(args)
+        self.set_covs(args)
 
+    def set_covs(self, args):
         covs = []
         for i in range(1, 15):
             path = os.path.join(args.data_path,
@@ -576,21 +606,8 @@ class WavenetFullTestSemb(WavenetFullTest):
         # linear layer going from covariance to lower dim embedding
         self.subject_emb = torch.nn.Linear(self.covs.shape[1],
                                            args.embedding_dim)
-    
-    def forward(self, data, causal_pad=False):
-        """Computes logits and encoding results from observations.
-        Args:
-            x: (B,T) or (B,Q,T) tensor containing observations
-            c: optional conditioning Tensor. (B,C,1) for global conditions,
-                (B,C,T) for local conditions. None if unused
-            causal_pad: Whether or not to perform causal padding.
-        Returns:
-            logits: (B,Q,T) tensor of logits. Note that the t-th temporal output
-                represents the distribution over t+1.
-            encoded: same as `.encode`.
-        """
-        x = data['inputs']
 
+    def get_cond(self, data):
         cond = None
         if self.args.cond_channels > 0:
             # cond: B x E x T
@@ -614,35 +631,7 @@ class WavenetFullTestSemb(WavenetFullTest):
             # concatenate subject and condition embeddings
             cond = torch.cat([cond, embs], dim=1)
 
-        # apply embedding to inputs and squeeze embeddings to last dim
-        x = self.quant_emb(x)
-        timesteps = x.shape[-2]
-        x = x.permute(0, 3, 1, 2)  # B x E x C x T
-        x = x.reshape(x.shape[0], -1, timesteps)  # B x (C*E) x T
-        
-        # apply pca separately along embedding dimension
-        x = self.pca_w(x)
-
-        skips = []
-        for layer in self.layers:
-            x, skip = layer(x, c=cond, causal_pad=causal_pad)
-            skips.append(skip)
-
-        if x.shape[-1] != skip.shape[-1]:
-            print(x.shape)
-            print(skip.shape)
-
-        out = self.logits(x, skips)
-
-        # reshape to get (B, C, Q, T) -> (B, C, T, Q)
-        out = out.reshape(
-            out.shape[0], -1, self.args.num_channels, out.shape[-1])
-        out = out.permute(0, 2, 3, 1)
-
-        # apply transposed embedding to outputs
-        out = self.inv_qemb(out)
-
-        return out
+        return cond
 
 
 class WavenetFullGauss(WavenetFullTest):
@@ -826,6 +815,29 @@ class WavenetFullChannelMix(WavenetFullChannel):
                                      args.num_channels,
                                      bias=False)
 
+    def get_cond(self, data):
+        cond = None
+        if self.args.cond_channels > 0:
+            # cond: B x E x T
+            cond_ind = data['condition']
+            try:
+                inds = torch.squeeze(cond_ind, dim=1)
+                cond = self.cond_emb(inds).permute(0, 2, 1)
+            except RuntimeError:
+                print(cond_ind.shape)
+                #print(x.shape)
+                #print(inds.shape)
+                raise
+
+            # set elements of cond to 0 where cond_ind is 0
+            cond = cond * (cond_ind > 0).float()
+
+            # repeat cond across new args.channels dim
+            cond = cond.unsqueeze(1).repeat(1, self.args.num_channels, 1, 1)
+            cond = cond.reshape(-1, cond.shape[-2], cond.shape[-1])
+
+        return cond
+
     def forward(self, data, causal_pad=False):
         """Computes logits and encoding results from observations.
         Args:
@@ -839,26 +851,7 @@ class WavenetFullChannelMix(WavenetFullChannel):
             encoded: same as `.encode`.
         """
         x = data['inputs']
-
-        cond = None
-        if self.args.cond_channels > 0:
-            # cond: B x E x T
-            cond_ind = data['condition']
-            try:
-                inds = torch.squeeze(cond_ind, dim=1)
-                cond = self.cond_emb(inds).permute(0, 2, 1)
-            except RuntimeError:
-                print(cond_ind.shape)
-                print(x.shape)
-                print(inds.shape)
-                raise
-
-            # set elements of cond to 0 where cond_ind is 0
-            cond = cond * (cond_ind > 0).float()
-
-            # repeat cond across new args.channels dim
-            cond = cond.unsqueeze(1).repeat(1, self.args.num_channels, 1, 1)
-            cond = cond.reshape(-1, cond.shape[-2], cond.shape[-1])
+        cond = self.get_cond(data)
 
         # apply embedding to each channel separately
         timesteps = x.shape[-1]
@@ -903,6 +896,38 @@ class WavenetFullChannelMix(WavenetFullChannel):
         out = out.permute(0, 1, 3, 2)
 
         return out
+
+
+class WavenetFullChannelMixSemb(WavenetFullChannelMix, WavenetFullTestSemb):
+    def build_model(self, args):
+        super().build_model(args)
+        self.set_covs(args)
+
+    def get_cond(self, data):
+        cond = None
+        if self.args.cond_channels > 0:
+            # cond: B x E x T
+            cond_ind = data['condition']
+            cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
+
+            # set elements of cond to 0 where cond_ind is 0
+            cond = cond * (cond_ind > 0).float()
+
+        embs = None
+        if self.args.embedding_dim > 0:
+            # get subject-specific covariance
+            covs = self.covs[data['sid'].reshape(-1)]
+            covs = covs.reshape(x.shape[0], -1, covs.shape[1])
+
+            # project to embedding space
+            embs = self.subject_emb(covs)
+            embs = embs.permute(0, 2, 1)
+
+        if self.args.embedding_dim and self.args.cond_channels:
+            # concatenate subject and condition embeddings
+            cond = torch.cat([cond, embs], dim=1)
+
+        return cond#, have to integrate fullchannelmix cond logic
 
 
 class WavenetFullSimple(WavenetSimple):

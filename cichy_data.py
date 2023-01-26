@@ -1157,7 +1157,7 @@ class CichyQuantizedBatched(CichyQuantized):
         self.x_val_t = None
         self.x_test_t = None
 
-    def get_batch(self, i, data, split):
+    def _get_batch(self, i, data, split):
         '''
         Get batch of data.
         '''
@@ -1195,6 +1195,41 @@ class CichyQuantizedBatched(CichyQuantized):
                 'sid': data[:, -1:, :]}
 
         # return data and subject indices
+        return data, data['sid']
+
+    def get_batch(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
+        if not self.args.class_mode:
+            return self._get_batch(i, data, split)
+
+        sr = self.args.sample_rate
+        data = []
+        for j in range(self.ex[split]):
+            path = os.path.join(self.args.load_data, split + str(j) + '.npy')
+            data.append(np.load(path)[:, :sr//2])
+
+        data = np.concatenate(data, axis=1)
+        data = torch.Tensor(data).long().cuda()
+
+        # get indices where condition turns on
+        diff = data[-2, 1:] - data[-2, :-1]
+        inds = (diff > 0).nonzero().squeeze()
+
+        baseline = self.args.sr_data // 10
+        rf = self.args.rf
+        # select examples around where inds is in the middle
+        data = [data[:, i-rf-baseline:i-rf-baseline+sr] for i in inds]
+        data = torch.stack(data)
+
+        num_chn = self.args.num_channels
+        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
+        data = {'inputs': data[:, :num_chn, :],
+                'targets': data[:, num_chn:num_chn*2, :],
+                'condition': data[:, -2:-1, :],
+                'sid': data[:, -1:, :]}
+
         return data, data['sid']
 
     def set_examples(self, split):
@@ -1279,7 +1314,7 @@ class CichyQuantizedAR(CichyQuantized):
             w = self.args.sample_rate[1] - self.args.sample_rate[0]
             self.args.sample_rate = w
 
-        args.num_channels = len(args.num_channels) - 1
+        args.num_channels = len(args.num_channels)
 
         # transform to examples
         self.x_train_t = self.create_examples(self.x_train_t)
@@ -1338,8 +1373,11 @@ class CichyQuantizedAR(CichyQuantized):
         data = {'inputs': data[:, :, :-1],
                 'targets': data[:, :, 1:]}
 
+        # add encoding functions to the data dict
+        data['maxabs'] = self.maxabs
+
         # return data and subject indices
-        return data, data['sid']
+        return data, None
 
 
 class CichyQuantizedGauss(CichyQuantized):

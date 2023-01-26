@@ -3,16 +3,16 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from classifiers_linear import LDA, LDA_average, LDA_cov, LDA_cov_sid, LDA_tp, LDA_sessnorm
+from classifiers_linear import LDA, LogisticReg, SVM, LDA_cov_featnorm
 from classifiers_simpleNN import SimpleClassifier
-from wavenets_simple import WavenetSimple, ConvPoolNet
-from classifiers_wavenet import WavenetClassifier, WavenetContClass, ConvPoolClassifier
-from cichy_data import CichyData, CichyContData, CichySimpleContData, CichyDataNoNorm
-from cichy_data import CichyDataCrossvalRobust, CichyDataRobust, CichyDataTrialNorm, CichyDataDISP
+from wavenets_simple import WavenetSimple
+from wavenets_full import WavenetFull
+from classifiers_wavenet import WavenetClassifier, WavenetContClass
+from cichy_data import CichyData, CichyContData, CichyDataTrialNorm
 
 
 class Args:
-    gpu = '0'  # cuda gpu index
+    gpu = '1'  # cuda gpu index
     func = {'LDA_baseline': True}  # dict of functions to run from training.py
 
     def __init__(self):
@@ -23,98 +23,93 @@ class Args:
         self.fix_seed = False
         self.common_dataset = False
         self.load_dataset = True  # whether to load self.dataset
-        self.learning_rate = 0.00005  # learning rate for Adam
-        self.anneal_lr = False  # whether to anneal learning rate
+        self.learning_rate = 0.0001  # learning rate for Adam
         self.max_trials = 1  # ratio of training data (1=max)
+        self.val_max_trials = False
         self.batch_size = 20  # batch size for training and validation data
-        self.epochs = 2000  # number of loops over training data
+        self.epochs = 5000  # number of loops over training data
         self.val_freq = 20  # how often to validate (in epochs)
         self.print_freq = 5  # how often to print metrics (in epochs)
         self.save_curves = True  # whether to save loss curves to file
         self.load_model = False
-        self.result_dir = [os.path.join(
+        self.result_dir = [os.path.join(  # path(s) to save model and others
             'results',
-            'disp_epoched',
-            'eeg',
-            '1_40hz_noica_thinkall_4s',
-            'lda_3sess')]
-        self.model = LDA_sessnorm  # class of model to use
-        self.dataset = CichyDataNoNorm  # dataset class for loading and handling data
+            'cichy_epoched',
+            'indiv_lda_cov',
+            f'subj{i}') for i in range(n)]
+        self.model = LDA_cov_featnorm  # class of model to use
+        self.dataset = CichyDataTrialNorm  # dataset class for loading and handling data
 
         # wavenet arguments
         self.activation = torch.nn.Identity()  # activation function for models
-        self.pooling = torch.nn.MaxPool1d
-        self.subjects = 0  # number of subjects used for training
+        self.subjects = 1  # number of subjects used for training
         self.embedding_dim = 0  # subject embedding size
-        self.p_drop = 0.5  # dropout probability
+        self.p_drop = 0.6  # dropout probability
         self.ch_mult = 2  # channel multiplier for hidden channels in wavenet
-        self.kernel_size = 5  # convolutional kernel size
+        self.kernel_size = 2  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [100, 200]  # start and end of timesteps within trials
-        self.rf = 8  # receptive field of wavenet
-        rf = 8
+        self.sample_rate = [0, 550]  # start and end of timesteps within trials
+        self.rf = 256  # receptive field of wavenet
+        rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
-        self.dilations = [1] * 4  # dilation: 2^num_layers
+        dilations = [ks**i for i in range(nl)]
+        self.dilations = dilations + dilations   # dilation: 2^num_layers
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
-        self.wavenet_class = ConvPoolNet  # class of wavenet model
-        self.load_conv = 'y' # where to load neural nerwork
-        # dimensionality reduction from
+        self.wavenet_class = WavenetSimple  # class of wavenet model
+        self.load_conv = 'y'  # where to load neural nerwork weights from
         self.pred = False  # whether to use wavenet in prediction mode
         self.init_model = True  # whether to reinitialize classifier
         self.reg_semb = True  # whether to regularize subject embedding
         self.fixed_wavenet = False  # whether to fix weights of wavenet
         self.alpha_norm = 0.0  # regularization multiplier on weights
-        self.num_classes = 5  # number of classes for classification
-        self.units = [20, 10]  # hidden layer sizes of fully-connected block
-        self.dim_red = 69  # number of pca components for channel reduction
-        self.ave_len = 5
+        self.num_classes = 118  # number of classes for classification
+        self.units = [2200, 2000]  # hidden layer sizes of fully-connected block
+        self.dim_red = 80  # number of pca components for channel reduction
         self.stft_freq = 0  # STFT frequency index for LDA_wavelet_freq model
-        self.decode_peak = 0.15
-        self.decode_front = 0.45
-        self.decode_back = 0.45
-        self.epoch_ratio = 1
-        self.label_smoothing = 0.0
-        self.no_nonepoch = False
+        self.decode_peak = 0.1
+        self.trial_average = False
+
+        # quantized wavenet arguments
+        self.mu = 255
+        self.residual_channels = 1024
+        self.dilation_channels = 1024
+        self.skip_channels = 1024
+        self.class_emb = 10
+        self.channel_emb = 30
+        self.cond_channels = self.class_emb + self.channel_emb
+        self.head_channels = int(self.skip_channels/2)
+        self.conv_bias = False
 
         # dataset arguments
-        data_path = os.path.join('/', 'well', 'woolrich', 'projects',
-                                 'disp_csaky', 'eeg',
-                                 'preproc1_40hz_noica', 'thinkall_inner_speech2', 'goods')
-        self.data_path = [os.path.join(data_path)]  # path(s) to data directory
-        self.num_channels = list(range(53))#[36,31,5,167,174,28,63,177,33,19,30,140,47,45,166,130,121,168,145,131,132,200,275,176,304,272,17,279,133,149,281,165,181,46,120,15,172,249,198,32,37,6,35,151,303,147,34,27,182,150,173,38,179,129,270,274,250,199,178,170,171,16,29,280,152,141,143,305,251,146,144,65,148,7,24,175,169,273,134,271,25,138,64,26,18,3,142,122,139,4,8,180,20,306]
+        data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
+                                 'cichy118_cont', 'preproc_data_onepass', 'epoched')
+        self.data_path = [os.path.join(data_path, f'subj{i}') for i in range(n)]  # path(s) to data directory
+        self.num_channels = [i for i in range(306) if i % 3] + [306]  # channel indices
         self.numpy = True  # whether data is saved in numpy format
-        self.shuffle = False
         self.crop = 1  # cropping ratio for trials
+        self.shuffle = True
         self.whiten = False  # pca components used in whitening
         self.group_whiten = False  # whether to perform whitening at the GL
-        self.split = [np.array([0.0, 0.2]),
-                       np.array([0.2, 0.4]),
-                       np.array([0.4, 0.6]),
-                       np.array([0.6, 0.8]),
-                       np.array([0.8, 1.0])] # validation split (start, end)
-        self.sr_data = 100  # sampling rate used for downsampling
-        self.original_sr = 1000  # original sampling rate of data
-        self.save_data = False  # whether to save the created data
-        self.val_max_trials = False
+        self.split = np.array([0, 0.2])  # validation split (start, end)
+        self.sr_data = 500  # sampling rate used for downsampling
+        self.original_sr = 1000
+        self.save_data = True  # whether to save the created data
         self.save_whiten = False
         self.subjects_data = False  # list of subject inds to use in group data
-        self.dump_data = [os.path.join(
-            self.data_path[i], 'standard_scaler_sr1000cv') for i in range(n)]  # path(s) for dumping data
-        self.load_data = ''#self.dump_data  # path(s) for loading data files
+        self.num_clip = 25
+        self.dump_data = [os.path.join(data_path, f'subj{i}', 'train_data_trialnorm', 'c') for i in range(n)]  # path(s) for dumping data
+        self.load_data = self.dump_data  # path(s) for loading data files
 
         # analysis arguments
-        self.closest_chs = 'notebooks/eeg_closest1'  # channel neighbourhood size for spatial PFI
         self.kernelPFI = False
-        self.chn_multi = 1  # channel multiplier for spatial PFI
+        self.closest_chs = 'notebooks/closest1'  # channel neighbourhood size for spatial PFI
         self.PFI_inverse = False  # invert which channels/timesteps to shuffle
-        self.pfich_timesteps = [[0, 4000]]  # time window for spatiotemporal PFI
-        self.PFI_perms = 50  # number of PFI permutations
-        self.PFI_step = 10
-        self.PFI_val = True  # whether to use validation set for PFI
-        self.halfwin = 10  # half window size for temporal PFI
+        self.pfich_timesteps = [[0, 50]]  # time window for spatiotemporal PFI
+        self.PFI_perms = 10  # number of PFI permutations
+        self.halfwin = 275  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
         self.generate_length = self.sr_data * 1000  # generated timeseries len
@@ -159,7 +154,6 @@ class Args:
         self.num_samples_CPC = 20
         self.dropout2d_bad = False
         self.k_CPC = 1
-        self.mu = 255
         self.groups = 1
         self.conv1x1_groups = 1
         self.pos_enc_type = 'cat'
