@@ -440,6 +440,71 @@ class LDA_cov_featnorm(LDA_cov):
         return self.model.score(x_val, y_val), x_val, y_val
 
 
+class LDA_cov_pca(LDA_cov_featnorm):
+    def normalize(self, x_train, x_val):
+        '''
+        Normalize data separately for each subject according to sid.
+        '''
+        x_train_norm = []
+        x_val_norm = []
+        self.pcas = []
+        for i in range(self.sid_train.max()+1):
+            x = x_train[self.sid_train == i]
+            pca = PCA(n_components=self.args.dim_red)
+            pca.fit(x)
+            self.pcas.append(pca)
+
+            x_train_norm.append(pca.transform(x))
+            x_val_norm.append(
+                pca.transform(x_val[self.sid_val == i]))
+
+        x_train_norm = np.concatenate(x_train_norm)
+        x_val_norm = np.concatenate(x_val_norm)
+
+        return x_train_norm, x_val_norm
+
+    def eval(self, x_val, window=None, sid=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+        if sid is not None:
+            sid_val = sid.cpu().numpy()
+        else:
+            sid_val = self.sid_val
+
+        if not self.args.load_conv:
+            x_val = self.pca.transform(x_val)
+            if self.lda_norm:
+                x_val = self.norm.transform(x_val)
+
+        x_val = self.prep_lda(x_val, sid=sid)
+
+        x_val_norm = []
+        for i in range(self.sid_train.max()+1):
+            x = self.pcas[i].transform(x_val[sid_val == i])
+            x_val_norm.append(x)
+            
+        x_val = np.concatenate(x_val_norm)
+
+        return self.model.score(x_val, y_val), x_val, y_val
+
+
+class LDA_pca(LDA_cov_pca):
+    def prep_lda(self, data, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+
+        if self.window is not None:
+            data = data[:, self.window[0]:self.window[1], :]
+        data = data.reshape(data.shape[0], -1)
+
+        return data
+
+
 class LDA_sessnorm(LDA):
     def run(self, x_train, x_val_, window=None, sid_val=None, sid_train=None):
         '''

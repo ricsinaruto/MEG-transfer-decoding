@@ -206,6 +206,9 @@ class WavenetFull(WavenetSimple):
         for l in self.layers:
             l.loaded()
 
+    def inv_qemb(self, x):
+        return self.inv_qemb_l(x)
+
     def build_model(self, args):
         self.quant_levels = args.mu + 1
         shift = args.sample_rate - args.rf + 1
@@ -214,7 +217,7 @@ class WavenetFull(WavenetSimple):
         self.subject_emb = Embedding(args.subjects, args.embedding_dim)
         self.cond_emb = Embedding(args.num_classes, args.class_emb)
         self.quant_emb = Embedding(self.quant_levels, args.quant_emb)
-        self.inv_qemb = Linear(args.quant_emb, self.quant_levels, bias=False)
+        self.inv_qemb_l = Linear(args.quant_emb, self.quant_levels, bias=False)
 
         self.softmax = Softmax(dim=-1)
 
@@ -405,7 +408,7 @@ class WavenetFull(WavenetSimple):
         B, C, T = data['inputs'].shape
         log_py = torch.log(torch.tensor(1.0 / nc))
 
-        data['condition'] = data['condition'].squeeze()
+        data['condition'] = data['condition'].squeeze(dim=1)
         cond_inds = data['condition'] > 0
         cond_inds[:, :self.args.rf] = False
 
@@ -418,7 +421,7 @@ class WavenetFull(WavenetSimple):
         # For each class
         for y in range(1, nc):
             # replace condition with current label
-            data['condition'] = data['condition'].squeeze()
+            data['condition'] = data['condition'].squeeze(dim=1)
             data['condition'][cond_inds] = y
             data['condition'] = data['condition'].unsqueeze(1)
 
@@ -585,6 +588,47 @@ class WavenetFullTest(WavenetFullEmbPca):
         out = self.inv_qemb(out)
 
         return out
+
+
+class WavenetFullTransposeEmb(WavenetFullTest):
+    def inv_qemb(self, x):
+        out = x @ self.quant_emb.weight.T
+        return (out, x)
+
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        logits = self.forward(data)
+        embs = logits[1]
+        logits = logits[0]
+
+        # have to make sure this exactly matches the inteded targets
+        targets = data['targets']
+        targets = targets[:, :, -logits.shape[-2]:]
+
+        shape = targets.shape
+        targets = targets.reshape(-1)
+        logits = logits.reshape(-1, logits.shape[-1])
+
+        all_loss = self.criterion(logits, targets)
+        loss = torch.mean(all_loss)
+
+        acc, preds = accuracy(logits, targets)
+        acc = torch.mean(acc.float())
+
+        pred_cont = mulaw_inv(preds)
+        target_cont = mulaw_inv(targets)
+
+        # compute MSE
+        mse = self.mse_loss(pred_cont, target_cont)
+
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss,
+                  'valloss/Validation accuracy: ': acc,
+                  'trainloss/Train accuracy: ': acc,
+                  'trainloss/Training MSE: ': mse,
+                  'valloss/Validation MSE: ': mse}
+
+        return losses, None, None
 
 
 class WavenetFullTestSemb(WavenetFullTest):
@@ -896,6 +940,72 @@ class WavenetFullChannelMix(WavenetFullChannel):
         out = out.permute(0, 1, 3, 2)
 
         return out
+
+
+class WavenetContrastiveChannelMix(WavenetFullChannelMix):
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        logits = self.forward(data)
+
+        # have to make sure this exactly matches the intended targets
+        targets = data['targets']
+        targets = targets[:, :, -logits.shape[-2]:]
+
+        shape = targets.shape
+        targets = targets.reshape(-1)
+        logits = logits.reshape(-1, logits.shape[-1])
+
+        all_loss = self.criterion(logits, targets)
+        loss = torch.mean(all_loss)
+
+        acc, preds = accuracy(logits, targets)
+        acc = torch.mean(acc.float())
+
+        pred_cont = mulaw_inv(preds)
+        target_cont = mulaw_inv(targets)
+
+        # compute MSE
+        mse = self.mse_loss(pred_cont, target_cont)
+
+        #mse = acc
+
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss,
+                  'valloss/Validation accuracy: ': acc,
+                  'trainloss/Train accuracy: ': acc,
+                  'trainloss/Training MSE: ': mse,
+                  'valloss/Validation MSE: ': mse}
+
+        if self.save_preds:
+            pred_cont = pred_cont.detach().cpu().numpy()
+            target_cont = target_cont.detach().cpu().numpy()
+            all_loss = all_loss.detach().cpu().numpy()
+
+            pred_cont = pred_cont.reshape(shape)
+            target_cont = target_cont.reshape(shape)
+            all_loss = all_loss.reshape(shape)
+
+            targets = targets.reshape(shape)
+            acc = torch.eq(targets[:, :, 1:], targets[:, :, :-1])
+            losses['valloss/repeat acc: '] = torch.mean(acc.float())
+
+            train = 'train' if train else 'val'
+            # save predictions and targets
+            path = os.path.join(self.args.result_dir, train + f'preds{i}.npy')
+            np.save(path, pred_cont)
+            path = os.path.join(self.args.result_dir, train + f'targets{i}.npy')
+            np.save(path, target_cont)
+            path = os.path.join(self.args.result_dir, train + f'losses{i}.npy')
+            np.save(path, all_loss)
+
+            # save data['sid']
+            path = os.path.join(self.args.result_dir, train + f'sid{i}.npy')
+            np.save(path, data['sid'].cpu().numpy())
+
+        
+
+        #return losses, pred_cont.reshape(shape), target_cont.reshape(shape)
+        return losses, None, None
 
 
 class WavenetFullChannelMixSemb(WavenetFullChannelMix, WavenetFullTestSemb):

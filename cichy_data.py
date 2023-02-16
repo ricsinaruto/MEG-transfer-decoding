@@ -375,11 +375,14 @@ class CichyDataTrialNorm(CichyData):
         #x_train = self.norm.transform(x_train)
         #x_val = self.norm.transform(x_val)
         #x_test = self.norm.transform(x_test)
+        var = 1e-6
+        var = np.std(x_train)
+        print('Global variance: ', var)
 
         mean = np.mean(x_train, axis=0)
-        x_train = (x_train - mean)/1e-6
-        x_val = (x_val - mean)/1e-6
-        x_test = (x_test - mean)/1e-6
+        x_train = (x_train - mean)/var
+        x_val = (x_val - mean)/var
+        x_test = (x_test - mean)/var
 
         # expand shape to trials x timesteps x channels
         x_train = x_train.reshape(x_train.shape[0], self.timesteps, -1)
@@ -1378,6 +1381,28 @@ class CichyQuantizedAR(CichyQuantized):
 
         # return data and subject indices
         return data, None
+
+
+class SimulatedQuantizedAR(CichyQuantizedAR):
+    def load_mat_data(self, args):
+        '''
+        Loads ready-to-train splits from mat files.
+        '''
+        chn = args.num_channels
+        x_train_ts = []
+        x_val_ts = []
+        x_test_ts = []
+
+        data = np.load(args.data_path).reshape(1, 1, -1)
+        # split data into train, val, test
+        split = args.split[1] - args.split[0]
+        val_len = int(data.shape[2] * split)
+        xtt = data[:, :, :val_len]
+        xvt = data[:, :, val_len:2*val_len]
+        xt = data[:, :, 2*val_len:]
+
+        # normalize data
+
 
 
 class CichyQuantizedGauss(CichyQuantized):

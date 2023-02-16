@@ -10,7 +10,7 @@ from copy import deepcopy
 
 from scipy import signal
 from scipy.io import savemat
-from scipy.fft import fft, ifft
+from scipy.fft import fft, ifft, rfft, irfft
 
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
@@ -1113,42 +1113,36 @@ class Experiment:
             val_func = self.kernelPFI
 
         # compute fft
-        val_fft = fft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
+        val_fft = rfft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
         shuffled_val_fft = val_fft.copy()
-        samples = [val_fft[0, 0, :].copy()]
+        #samples = [val_fft[0, 0, :].copy()]
 
         # original loss without shuffling
         og_loss = val_func(self.dataset.x_val_t, True)
 
         perm_list = []
         for p in range(self.args.PFI_perms):
+            id_arr = np.arange(val_fft.shape[0])
             # shuffle frequency components across channels
             idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
-            for i in range(times):
+            for i in range(times//2+1):
                 a = shuffled_val_fft[:, :, i].T
-                out = a[idx, np.arange(a.shape[1])].T
+                out = a[idx, id_arr].T
                 shuffled_val_fft[:, :, i] = out
 
             loss_list = [og_loss]
             # slide over epoch and always permute frequencies within a window
             for i in range(hw, times//2-hw):
-                if i > hw:
-                    dataset_val_fft = val_fft.copy()
-                    win1 = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
-                    dataset_val_fft[:, :, i-hw:i+hw+1] = win1
+                dataset_val_fft = val_fft.copy()
+                win = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
+                dataset_val_fft[:, :, i-hw:i+hw+1] = win
+                #dataset_val_fft[:, :, i-hw:i+hw+1] = 0 + 0j
 
-                    if -i+hw+1 == 0:
-                        win2 = shuffled_val_fft[:, :, -i-hw:].copy()
-                        dataset_val_fft[:, :, -i-hw:] = win2
-                    else:
-                        win2 = shuffled_val_fft[:, :, -i-hw:-i+hw+1].copy()
-                        dataset_val_fft[:, :, -i-hw:-i+hw+1] = win2
+                #samples.append(dataset_val_fft[0, 0, :].copy())
 
-                    samples.append(dataset_val_fft[0, 0, :].copy())
-
-                    # inverse fourier transform
-                    data = torch.Tensor(ifft(dataset_val_fft))
-                    self.dataset.x_val_t[:, :chn, :] = data
+                # inverse fourier transform
+                data = torch.Tensor(irfft(dataset_val_fft))
+                self.dataset.x_val_t[:, :chn, :] = data
 
                 loss = val_func(self.dataset.x_val_t)
                 loss_list.append(loss)
@@ -1160,7 +1154,7 @@ class Experiment:
                             'val_loss_PFIfreqs' + str(hw*2) + '.npy')
         np.save(path, np.array(perm_list))
 
-        np.save(path + '_samples', np.array(samples))
+        #np.save(path + '_samples', np.array(samples))
 
     def PFIfreq_ch(self):
         '''
@@ -1179,15 +1173,14 @@ class Experiment:
             val_func = self.kernelPFI
 
         # read a file containing closest channels to each channel location
-        path = os.path.join(self.args.result_dir, 'closest' + str(top_chs))
-        with open(path, 'rb') as f:
+        with open(top_chs, 'rb') as f:
             closest_k = pickle.load(f)
 
         # evaluate without channel shuffling
         og_loss = val_func(self.dataset.x_val_t, True)
 
         # compute fft
-        val_fft = fft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
+        val_fft = rfft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
         shuffled_val_fft = val_fft.copy()
 
         samples = [val_fft[0, 0, :].copy()]
@@ -1196,14 +1189,14 @@ class Experiment:
         for p in range(self.args.PFI_perms):
             # shuffle frequency components across channels
             idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
-            for i in range(times):
+            for i in range(times//2+1):
                 a = shuffled_val_fft[:, :, i].T
                 out = a[idx, np.arange(a.shape[1])].T
                 shuffled_val_fft[:, :, i] = out
 
             windows = []
             # slide over epoch and always permute frequencies within a window
-            for i in range(hw+1, times//2-hw):
+            for i in range(hw, times//2-hw):
 
                 loss_list = [og_loss]
                 for c in range(int(chn/3)):
@@ -1212,18 +1205,12 @@ class Experiment:
                     chn_idx = np.append(np.append(a, a+1), a+2)
 
                     dataset_val_fft = val_fft.copy()
-
-                    # instead of shuffling just set to 0
-                    dataset_val_fft[:, chn_idx, i-hw:i+hw+1] = 0 + 0j
-                    if -i+hw+1 == 0:
-                        dataset_val_fft[:, chn_idx, -i-hw:] = 0 + 0j
-                    else:
-                        dataset_val_fft[:, chn_idx, -i-hw:-i+hw+1] = 0 + 0j
-
-                    samples.append(dataset_val_fft[0, 0, :].copy())
+                    win1 = shuffled_val_fft[:, chn_idx, i-hw:i+hw+1].copy()
+                    dataset_val_fft[:, chn_idx, i-hw:i+hw+1] = win1
+                    #samples.append(dataset_val_fft[0, 0, :].copy())
 
                     # inverse fourier transform
-                    data = torch.Tensor(ifft(dataset_val_fft))
+                    data = torch.Tensor(irfft(dataset_val_fft))
                     self.dataset.x_val_t[:, :chn, :] = data
 
                     loss = val_func(self.dataset.x_val_t)
@@ -1239,6 +1226,141 @@ class Experiment:
         np.save(path, np.array(perm_list))
 
         np.save(path + '_samples', np.array(samples))
+
+    def PFIfreq_ts_(self):
+        '''
+        Permutation Feature Importance (PFI) function for frequencies.
+        spectral PFI is done separately for each channel.
+        '''
+        hw = self.args.halfwin
+        ts_hw = self.args.pfich_timesteps
+        chn = self.dataset.x_val_t.shape[1] - 1
+        times = self.dataset.x_val_t.shape[2]
+
+        val_t = self.dataset.x_val_t.clone()
+
+        # whether dealing with LDA or deep learning models
+        lda_or_not = isinstance(self.model, LDA)
+        val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+        if self.args.kernelPFI:
+            val_func = self.kernelPFI
+
+        # evaluate without channel shuffling
+        og_loss = val_func(self.dataset.x_val_t, True)
+
+        # compute fft
+        val_fft = rfft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
+        shuffled_val_fft = val_fft.copy()
+
+        perm_list = []
+        for p in range(self.args.PFI_perms):
+            # shuffle frequency components across channels
+            idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
+            for i in range(times//2+1):
+                a = shuffled_val_fft[:, :, i].T
+                out = a[idx, np.arange(a.shape[1])].T
+                shuffled_val_fft[:, :, i] = out
+
+            windows = []
+            # slide over epoch and always permute frequencies within a window
+            for i in range(hw, times//2-hw):
+                dataset_val_fft = val_fft.copy()
+                win1 = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
+                dataset_val_fft[:, :, i-hw:i+hw+1] = win1
+
+                # inverse fourier transform
+                data = torch.Tensor(irfft(dataset_val_fft))
+
+                loss_list = [og_loss]
+                for t in range(ts_hw, times-ts_hw, self.args.PFI_step):
+                    self.dataset.x_val_t = val_t.clone()
+
+                    window = data[:, :chn, t-ts_hw:t+ts_hw].clone()
+                    self.dataset.x_val_t[:, :chn, t-ts_hw:t+ts_hw] = window
+
+                    loss = val_func(self.dataset.x_val_t)
+                    loss_list.append(loss)
+
+                windows.append(np.array(loss_list))
+
+            perm_list.append(np.array(windows))
+
+        # save accuracies to file
+        path = os.path.join(self.args.result_dir,
+                            f'val_loss_PFIfreqs{hw*2}_ts{ts_hw*2}.npy')
+        np.save(path, np.array(perm_list))
+
+    def PFIfreq_ts(self):
+        '''
+        Permutation Feature Importance (PFI) function for frequencies.
+        spectral PFI is done separately for each channel.
+        '''
+        hw = self.args.halfwin
+        ts_hw = self.args.pfich_timesteps
+        chn = self.dataset.x_val_t.shape[1] - 1
+        sr = self.args.sr_data
+
+        # whether dealing with LDA or deep learning models
+        lda_or_not = isinstance(self.model, LDA)
+        val_func = self.LDA_eval_ if lda_or_not else self.evaluate_
+        if self.args.kernelPFI:
+            val_func = self.kernelPFI
+
+        # evaluate without channel shuffling
+        og_loss = val_func(self.dataset.x_val_t, True)
+
+        # compute fft
+        data = self.dataset.x_val_t[:, :chn, :].cpu().numpy()
+        freqs, times, val_fft = signal.stft(data,
+                                            fs=sr,
+                                            window='hamming',
+                                            nperseg=ts_hw*2,
+                                            noverlap=ts_hw*2-1,
+                                            boundary=None)
+        val_fft = val_fft.copy()
+        shuffled_val_fft = val_fft.copy()
+
+        perm_list = []
+        for p in range(self.args.PFI_perms):
+            id_arr = np.arange(val_fft.shape[0])
+            idx = np.random.rand(*val_fft[:, :, 0, 0].T.shape).argsort(0)
+            for f in range(len(freqs)):
+                for t in range(0, len(times), self.args.PFI_step):
+                    a = shuffled_val_fft[:, :, f, t].T
+                    out = a[idx, id_arr].T
+                    shuffled_val_fft[:, :, f, t] = out
+
+            windows = []
+            # slide over epoch and always permute frequencies within a window
+            for f in range(len(freqs)):
+
+                loss_list = [og_loss]
+                for t in range(hw, len(times)-hw, self.args.PFI_step):
+                    dataset_val_fft = val_fft.copy()
+
+                    win = shuffled_val_fft[:, :, f:f+1, t-hw:t+hw+1].copy()
+                    dataset_val_fft[:, :, f:f+1, t-hw:t+hw+1] = win
+
+                    # inverse fourier transform
+                    _, X = signal.istft(dataset_val_fft,
+                                        fs=sr,
+                                        window='hamming',
+                                        nperseg=ts_hw*2,
+                                        noverlap=ts_hw*2-1,
+                                        boundary=None)
+                    self.dataset.x_val_t[:, :chn, :] = torch.Tensor(X)
+
+                    loss = val_func(self.dataset.x_val_t)
+                    loss_list.append(loss)
+
+                windows.append(np.array(loss_list))
+
+            perm_list.append(np.array(windows))
+
+        # save accuracies to file
+        path = os.path.join(self.args.result_dir,
+                            f'val_loss_PFIfreqs_ts{hw*2}.npy')
+        np.save(path, np.array(perm_list))
 
     def PFIch(self):
         '''
@@ -1668,6 +1790,10 @@ def main(Args):
                 if '.pt' not in args_new.load_conv:
                     args_new.load_conv = os.path.join(
                         args_new.load_conv, 'cv' + str(n), 'model.pt')
+                else:
+                    paths = args_new.load_conv.split('/')
+                    args_new.load_conv = os.path.join(
+                        '/'.join(paths[:-1]), 'cv' + str(n), paths[-1])
 
             # load cross-validation folds accordingly
             if split_len > 1:
@@ -1750,6 +1876,8 @@ def main(Args):
                 e.PFIfreq()
             if Args.func.get('PFIfreq_ch'):
                 e.PFIfreq_ch()
+            if Args.func.get('PFIfreq_ts'):
+                e.PFIfreq_ts()
             if Args.func.get('gradient_analysis'):
                 e.gradient_analysis()
             if Args.func.get('model_inversion'):

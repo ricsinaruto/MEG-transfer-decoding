@@ -190,6 +190,38 @@ class EventSimulation(DondersData):
             self.stc = np.array(pickle.load(open(path, 'rb')))
 
 
+class EventSimulationFixLifetimes(EventSimulation):
+    def __init__(self, args):
+        '''
+        Either create simulated data or load already created data.
+        '''
+        if args.load_data:
+            self.load_data(args)
+            self.set_common()
+            return
+
+        # limit the longest lifetime to max_len
+        self.gamma = 225 + 25 * np.random.rand(args.seconds)
+        self.gamma = self.gamma.astype(int)
+
+        # create the data and the gaussian noise arrays
+        data_length = np.sum(self.gamma) + args.sim_ar_order
+        self.data = np.random.randn(args.sim_num_channels, data_length)
+        self.noise = np.random.normal(
+            0, args.noise_std, (args.sim_num_channels, data_length))
+        self.ar_noise_std = np.array(args.ar_noise_std)
+
+        self.fill(args)
+        self.generate(args)
+
+        # run_fft(args, self.data[0, :], 'unfiltered_input_freq.svg')
+
+        # save the simulated data and the state time course
+        savemat(os.path.join(args.result_dir, 'data.mat'), {'X': self.data})
+        path = os.path.join(args.result_dir, 'stc')
+        pickle.dump(self.stc, open(path, 'wb'))
+
+
 class EventSimulationQuantized(EventSimulation):
     '''
     This class handles the event-based simulated data in the quantized domain.

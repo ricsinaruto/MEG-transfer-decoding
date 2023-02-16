@@ -20,11 +20,11 @@ from sklearn.metrics.pairwise import euclidean_distances
 from pyriemann.utils.distance import distance_riemann
 
 raws = []
-for i in range(2, 12):
+for i in range(3, 4):
     sid = str(i)
     fif_name = "preproc_preproc_raw.fif"
-    base = "/gpfs2/well/woolrich/projects/disp_csaky/eeg/"
-    dataset_path = base + f"session{i}/preproc1_40hz_noica/oslpy/" + fif_name
+    base = "/gpfs2/well/woolrich/projects/disp_csaky/eeg/cross_nocross/"
+    dataset_path = base + f"preproc1_40hz/oslpy/" + fif_name
 
     # load raw data
     raws.append(mne.io.read_raw_fif(dataset_path, preload=True))
@@ -45,7 +45,7 @@ for raw in raws:
     new_events = []
     for i, (et, ec) in enumerate(zip(event_t, event_c)):
 
-        '''
+
         if ec < 7 and ec > 1:
             count1 += 1
             if event_c[i+1] == 8:
@@ -53,7 +53,7 @@ for raw in raws:
             else:
                 print('error1')
                 continue
-
+        '''
             if event_c[i+2] == 8:
                 new_events.append(np.array([event_t[i+2], 0, ec]))
             else:
@@ -67,7 +67,7 @@ for raw in raws:
             else:
                 print('error4')
         '''
-
+        '''
         if ec < 16 and ec > 10:
             count2 += 1
             split_events = event_c[i-18:i-4]
@@ -81,7 +81,7 @@ for raw in raws:
             else:
                 print('erorr5')
                 print(event_c[i-20:i])
-            '''
+
             if event_c[tind+2] == 8:
                 new_events.append(np.array([event_t[tind+2], 0, ec-9]))
             else:
@@ -96,7 +96,7 @@ for raw in raws:
                 new_events.append(np.array([event_t[tind+4], 0, ec-9]))
             else:
                 print('erorr8')
-            '''
+        '''
  
 
 
@@ -110,13 +110,13 @@ for raw in raws:
     ep = mne.Epochs(raw,
                     new_events,
                     event_id=epoch_event_id,
-                    tmin=-0.5,
-                    tmax=6,
+                    tmin=0.5,
+                    tmax=5,
                     baseline=None,
                     picks=['eeg'],
                     reject=None,
                     preload=True,
-                    reject_by_annotation=False)
+                    reject_by_annotation=True)
     epochs.append(ep)
 
 '''
@@ -146,7 +146,7 @@ for sess, ep in enumerate(epochs):
 
 
 for i, session in enumerate(epochs):
-    outdir = base + f"preproc1_40hz_noica/thinkall_inner_speech_5.5s/sub" + str(i)
+    outdir = base + f"preproc1_40hz/isonly_clean_4.5s/sub" + str(i)
     for epoch, event in zip(session, session.events):
         data = epoch.T.astype(np.float32)
 
