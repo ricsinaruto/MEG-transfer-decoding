@@ -26,6 +26,9 @@ scripts/.DS_Store
 
 notebooks/*.png
 notebooks/*.txt
+notebooks/eeg_visu/*
+notebooks/mvpa_figures/*
+notebooks/*jvsc*
 
 scripts/cichy_data.py
 scripts/classifiers_simpleNN.py
