@@ -3,10 +3,10 @@ addpath(genpath('/Users/ricsi/Documents/GitHub/osl/osl-core'))
 osl_startup
 
 %% Set parameters
-fs = 250;
+fs = 100;
 band_pass = [0.1 124.99];
 %freqs = [10 24 36 45];
-%freqs = [10 14 18 22 26 33 38 45];
+freqs = [10 20];
 %freqs = [8 11 14 17 20 23 26 29 35 38 41 45];
 time_bandwidth = 120;
 bin_width = 3;
@@ -28,14 +28,14 @@ save(strcat('simulated/8event_snr1/filtered125hz.mat'), 'X')
 
 %% Plot wavelet and welch spectra of timeseries
 figure;
-cwt(squeeze(X(6, :)), fs, 'TimeBandwidth', time_bandwidth);
+cwt(squeeze(X(200, 1:10000)), fs, 'TimeBandwidth', time_bandwidth);
 for i = 1:size(freqs, 2)
     yline(freqs(i), 'white');
 end
 
 %%
 figure;
-[Xpxx, Xf] = pwelch(X(1, :), fs, fs/2, 1.0:0.1:100, fs);
+[Xpxx, Xf] = pwelch(x(:, :)', fs, fs/2, 3.0:0.1:50, fs);
 plot(Xf, Xpxx);
 %for i = 1:size(freqs, 2)
 %    xline(freqs(i), 'red');
