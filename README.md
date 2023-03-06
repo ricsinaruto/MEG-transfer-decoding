@@ -1,5 +1,5 @@
 # MEG-transfer-decoding
-
+## This repository is for my active research, and things may break often.
 First requirements need to be installed from *requirements.txt*.
 For each run modify *args.py* to specify parameters and behaviour, then run *launch.py* which calls *training.py* which contains the main experimental pipeline:
 ```
