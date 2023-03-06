@@ -5,6 +5,9 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
+# import savemat
+from scipy.io import savemat
+
 import os
 
 from wavenets_simple import WavenetSimple
@@ -93,8 +96,11 @@ class WavenetLayer(Module):
 
         self.dropout = torch.nn.Dropout1d(p=dropout)
 
-    def loaded(self, dropout=0.0):
+    def loaded(self, dropout=0.0, shift=None):
         self.dropout = torch.nn.Dropout1d(p=dropout)
+
+        if shift:
+            self.shift = shift
 
     def forward(self, x, c, causal_pad=False):
         """Compute residual and skip output from inputs x.
@@ -203,8 +209,8 @@ class WavenetFull(WavenetSimple):
         super().loaded(args)
         self.losses = []
 
-        for l in self.layers:
-            l.loaded()
+        for layer in self.layers:
+            layer.loaded(shift=args.skips_shift)
 
     def inv_qemb(self, x):
         return self.inv_qemb_l(x)
@@ -343,8 +349,6 @@ class WavenetFull(WavenetSimple):
         # compute MSE
         mse = self.mse_loss(pred_cont, target_cont)
 
-        #mse = acc
-
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss,
@@ -353,7 +357,9 @@ class WavenetFull(WavenetSimple):
                   'trainloss/Training MSE: ': mse,
                   'valloss/Validation MSE: ': mse}
 
-        if self.save_preds:
+        if self.save_preds and False:
+            
+
             pred_cont = pred_cont.detach().cpu().numpy()
             target_cont = target_cont.detach().cpu().numpy()
             all_loss = all_loss.detach().cpu().numpy()
@@ -849,6 +855,123 @@ class WavenetFullChannel(WavenetFullTest):
         out = out.permute(0, 1, 3, 2)
 
         return out
+
+    def generate(self, train=None):
+        '''
+        Recursively generate with a trained model in various ways.
+        '''
+        self.eval()
+        input_mode = self.args.generate_input
+        mode = self.args.generate_mode
+        sampling = self.args.generate_sampling
+        noise = self.args.generate_noise
+        channels = self.args.num_channels
+        shift = self.args.rf
+        gen_len = self.args.generate_length
+
+        output = torch.zeros((channels, gen_len)).cuda()
+
+        if input_mode == 'gaussian_noise':
+            # input is gaussian noise
+            data = torch.normal(0.0, noise, size=(channels, gen_len)).cuda()
+        elif input_mode == 'none':
+            data = torch.normal(0.0, noise, size=(channels, shift))
+            data = torch.cat((data, torch.zeros((channels, gen_len))), dim=1)
+            data = data.cuda()
+        elif input_mode == 'shuffled_data':
+            # input data is shuffled training data
+            train = train[:, :-3, :].reshape(-1)
+            inds = np.random.shuffle(np.arange(len(train)))
+            data = train[inds].reshape(channels, gen_len)
+        elif input_mode == 'data':
+            data = train[0, :channels, :shift]
+            zeros = torch.zeros((channels, gen_len), dtype=torch.int32).cuda()
+            data = torch.cat((data, zeros), dim=1)
+
+            # create conditioning data with shift+gen_len length
+            '''
+            seconds = int(gen_len/self.args.sr_data)*2
+            epoch_len = int(self.args.sr_data*0.5)
+            cond = []
+            for s in range(seconds):
+                # choose a class randomly from self.args.num_classes
+                cl = np.random.randint(1, self.args.num_classes)
+                cond.append(np.array([cl]*epoch_len))
+
+                # uniform distribution between 0.9 and 1
+                num_zeros = np.random.randint(int(epoch_len*0.8), epoch_len)
+                cond.append(np.zeros((num_zeros)))
+
+            cond = np.concatenate(cond)[:shift+gen_len]
+            # replace first epoch with train cond channel
+            cond = torch.Tensor(cond).cuda().long()
+            cond[:shift] = train[0, -2, :shift]
+            '''
+            cond = train[:, -2, :shift].reshape(-1)[:shift+gen_len]
+            cond = cond.unsqueeze(0).unsqueeze(0)
+
+        elif input_mode == 'frequency':
+            # generated data with starting from an input with specific freq
+            data = np.random.normal(0, 0.0, (channels, self.args.sr_data*50))
+            x = np.arange(shift)/self.args.sr_data
+            sine = np.sin(2*np.pi*noise*x)
+            sine = (sine - np.mean(sine))/np.std(sine)
+            data[0, :shift] = sine
+            # data[:, :shift] = self.args.dataset.x_val[:, start:start+shift]
+            data = torch.Tensor(data).cuda()
+        else:
+            raise ValueError('No valid args.generate_input specified.')
+
+        print(data.shape)
+        print(cond.shape)
+
+        # recursively generate using the previously defined input
+        for t in range(shift, data.shape[1]):
+            inputs = data[:, t-shift:t].reshape(1, channels, -1)
+            cond_ex = cond[:, :, t-shift:t]
+            out = self.forward({'inputs': inputs, 'condition': cond_ex})
+
+            # apply softmax to get probabilities
+            out = F.softmax(out, dim=-1)
+
+            # get roulette wheel prediction based on output probabilities (last dimension)
+            out = out.reshape(-1, out.shape[-1])
+
+            if sampling == 'roulette':
+                out = torch.multinomial(out, 1).reshape(-1)
+            elif sampling == 'argmax':
+                out = torch.argmax(out, dim=-1).reshape(-1)
+            elif sampling == 'top-p':
+                # top-p sampling: sample from the smallest set of tokens whose cumulative probability exceeds args.top_p
+                # select the smallest set of tokens whose cumulative probability exceeds args.top_p
+                sorted_logits, sorted_indices = torch.sort(out, descending=True)
+                cumulative_probs = torch.cumsum(sorted_logits, dim=-1)
+                sorted_indices_to_remove = cumulative_probs > self.args.top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                indices_to_remove = sorted_indices_to_remove.scatter(
+                    1, sorted_indices, sorted_indices_to_remove)
+                out[indices_to_remove] = 0
+                out = torch.multinomial(out, 1).reshape(-1)
+
+            # switch between IIR, FIR, and purely recursive modes
+            if mode == 'IIR':
+                data[:, t] = data[:, t] + out
+            elif mode == 'FIR':
+                output[:, t] = out
+            elif mode == 'recursive':
+                data[:, t] = out
+            else:
+                raise ValueError('No valid args.generate_mode specified.')
+
+        if mode == 'FIR':
+            data = output
+
+        data = data.cpu().numpy()
+        name = 'generated_' + input_mode + mode + sampling + str(noise) + '.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+        return data
 
 
 class WavenetFullChannelMix(WavenetFullChannel):

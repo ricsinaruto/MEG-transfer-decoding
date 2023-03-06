@@ -1121,6 +1121,66 @@ class CichyQuantized(MRCData):
         pickle.dump(self.maxabs, open(path, 'wb'))
 
 
+class CichyQuantizedSimulation(CichyQuantized):
+    def load_data(self, args):
+        '''
+        Load raw data from multiple subjects.
+        '''
+        # whether we are working with one subject or a directory of them
+        if isinstance(args.data_path, list):
+            paths = args.data_path
+        else:
+            paths = os.listdir(args.data_path)
+            paths = [p for p in paths if 'sub' in p]
+            paths = [os.path.join(args.data_path, p) for p in paths]
+            paths = [p for p in paths if not os.path.isdir(p)]
+        print('Number of subjects: ', len(paths))
+
+        resample = int(args.original_sr/args.sr_data)
+
+        x_trains = []
+        x_vals = []
+        x_tests = []
+        for sid, path in enumerate(paths):
+            print(path)
+            dataset = np.load(path)
+
+            # choose first 306 channels and downsample
+            dataset = dataset[args.num_channels, ::resample]
+            labels = [0] * dataset.shape[1]
+
+            labels = np.array(labels)
+
+            split_v = int(dataset.shape[1]*0.13)
+            split_t = int(dataset.shape[1]*0.26)
+            labels = {'val': labels[:split_v].reshape(1, -1),
+                      'test': labels[split_v:split_t].reshape(1, -1),
+                      'train': labels[split_t:].reshape(1, -1)}
+
+            # create training and validation splits
+            x_val = dataset[:, :split_v]
+            x_test = dataset[:, split_v:split_t]
+            x_train = dataset[:, split_t:]
+
+            x_train, x_val, x_test = self.normalize(x_train, x_val, x_test)
+
+            # add labels to data
+            subid = np.array([sid] * x_val.shape[1]).reshape(1, -1)
+            x_val = np.concatenate((x_val, labels['val'], subid), axis=0)
+
+            subid = np.array([sid] * x_test.shape[1]).reshape(1, -1)
+            x_test = np.concatenate((x_test, labels['test'], subid), axis=0)
+
+            subid = np.array([sid] * x_train.shape[1]).reshape(1, -1)
+            x_train = np.concatenate((x_train, labels['train'], subid), axis=0)
+
+            x_trains.append(x_train)
+            x_tests.append(x_test)
+            x_vals.append(x_val)
+
+        return x_trains, x_vals, x_tests
+
+
 class CichyQuantizedBatched(CichyQuantized):
     def __init__(self, args):
         '''
@@ -1383,26 +1443,8 @@ class CichyQuantizedAR(CichyQuantized):
         return data, None
 
 
-class SimulatedQuantizedAR(CichyQuantizedAR):
-    def load_mat_data(self, args):
-        '''
-        Loads ready-to-train splits from mat files.
-        '''
-        chn = args.num_channels
-        x_train_ts = []
-        x_val_ts = []
-        x_test_ts = []
-
-        data = np.load(args.data_path).reshape(1, 1, -1)
-        # split data into train, val, test
-        split = args.split[1] - args.split[0]
-        val_len = int(data.shape[2] * split)
-        xtt = data[:, :, :val_len]
-        xvt = data[:, :, val_len:2*val_len]
-        xt = data[:, :, 2*val_len:]
-
-        # normalize data
-
+class CichyQuantizedARSimulation(CichyQuantizedAR, CichyQuantizedSimulation):
+    pass
 
 
 class CichyQuantizedGauss(CichyQuantized):

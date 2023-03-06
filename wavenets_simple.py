@@ -375,7 +375,7 @@ class WavenetSimple(Module):
         '''
         return self.forward(inputs)[0].detach().reshape(channels)
 
-    def generate(self):
+    def generate(self, train_data):
         '''
         Recursively generate with a trained model in various ways.
         '''
@@ -398,9 +398,13 @@ class WavenetSimple(Module):
             data = data.cuda()
         elif input_mode == 'shuffled_data':
             # input data is shuffled training data
-            train = self.args.dataset.x_train[0, :]
-            data = np.random.choice(train, (channels, gen_len))
-            data = torch.Tensor(data).cuda() * noise
+            data = torch.zeros((channels, gen_len)).cuda()
+            for c in range(channels):
+                ch_data = train_data[:, c, :shift].reshape(-1)
+                ch_data = ch_data[torch.randperm(ch_data.shape[0])]
+                data[c] = ch_data[:gen_len]
+
+            data *= noise
         elif input_mode == 'frequency':
             # generated data with starting from an input with specific freq
             data = np.random.normal(0, 0.0, (channels, self.args.sr_data*50))
@@ -772,6 +776,9 @@ class ConvAR(WavenetSimple):
         acc_shifted = (targets_1 == targets_2).sum() / targets_1.shape[0]
 
         return mse_shifted, acc_shifted
+
+    def generate_forward(self, inputs, channels):
+        return self.conv(inputs).detach().reshape(channels)
 
     def loss(self, data, i=0, sid=None, train=True, criterion=None):
         preds = self.conv(data['inputs'])

@@ -299,6 +299,8 @@ class Experiment:
         with open(path, 'w') as f:
             f.write(str(loss))
 
+        self.testing()
+
     def save_validation_subs(self):
         '''
         Print validation losses separately on each subject's dataset.
@@ -1705,7 +1707,7 @@ class Experiment:
         self.model.plot_kernels()
 
     def generate(self):
-        self.model.generate()
+        self.model.generate(self.dataset.x_train_t)
 
     def kernel_network_FIR(self):
         self.model.kernel_network_FIR()
@@ -1751,6 +1753,9 @@ def main(Args):
         args_pass.compare_model = checklist(args.compare_model, i)
         args_pass.stft_freq = checklist(args.stft_freq, i)
         args_pass.save_whiten = checklist(args.save_whiten, i)
+        args_pass.generate_length = checklist(args.generate_length, i)
+        args_pass.sr_data = checklist(args.sr_data, i)
+        args_pass.generate_noise = checklist(args.generate_noise, i)
 
         if isinstance(args.num_channels[0], list):
             args_pass.num_channels = args.num_channels[i]
