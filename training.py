@@ -1795,10 +1795,6 @@ def main(Args):
                 if '.pt' not in args_new.load_conv:
                     args_new.load_conv = os.path.join(
                         args_new.load_conv, 'cv' + str(n), 'model.pt')
-                else:
-                    paths = args_new.load_conv.split('/')
-                    args_new.load_conv = os.path.join(
-                        '/'.join(paths[:-1]), 'cv' + str(n), paths[-1])
 
             # load cross-validation folds accordingly
             if split_len > 1:
@@ -1813,6 +1809,10 @@ def main(Args):
                     paths = args_pass.load_model.split('/')
                     args_new.load_model = os.path.join(
                         '/'.join(paths[:-1]), 'cv' + str(n), paths[-1])
+
+                paths = args_new.load_conv.split('/')
+                args_new.load_conv = os.path.join(
+                    '/'.join(paths[:-1]), 'cv' + str(n), paths[-1])
 
             # else use max_trials for looping logic
             elif isinstance(args.max_trials, list):

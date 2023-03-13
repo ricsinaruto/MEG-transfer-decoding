@@ -26,7 +26,7 @@ class Args:
             'results_test',
             'lda_nn',
             'subj' + str(i),
-            'spatiotemporalPFI') for i in range(n)]
+            'spatialPFI') for i in range(n)]
         self.model = LDA  # class of model to use
         self.dataset = CichyData  # dataset class for loading and handling data
         self.max_trials = 1.0  # ratio of training data (1=max)
@@ -76,11 +76,11 @@ class Args:
         # in subsequent runs on the same data
 
         # PFI arguments
-        self.closest_chs = 'examples/closest4'  # path to a file containing
+        self.closest_chs = 'examples/closest1'  # path to a file containing
         # closest n channels for each channel as a list
         self.PFI_inverse = False  # corresponds to the inverse PFI mehtod
         # described in the paper
-        self.pfich_timesteps = [[i-5, i+5] for i in range(5, 45)]  # time window for spatiotemporal PFI
+        self.pfich_timesteps = [[0, 50]]  # time window for spatiotemporal PFI
         self.PFI_perms = 10  # number of PFI permutations
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.PFI_val = True  # whether to perform PFI on validation data

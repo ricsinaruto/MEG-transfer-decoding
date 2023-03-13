@@ -9,7 +9,7 @@ from classifiers_linear import LDA
 
 class Args:
     gpu = '1'  # cuda gpu index
-    func = {'PFIch': True}  # dict of functions to run from training.py
+    func = {'LDA_channel': True}  # dict of functions to run from training.py
 
     def __init__(self):
         n = 1  # can be used to do multiple runs, e.g. over subjects
@@ -17,16 +17,12 @@ class Args:
         # experiment arguments
         self.name = 'args.py'  # name of this file, don't change
         self.fix_seed = True  # whether to fix random seed
-        self.load_model = [os.path.join(  # path(s) to load model
-            'results_test',
-            'lda_nn',
-            'subj' + str(i),
-            'model.pt25') for i in range(n)]
+        self.load_model = False  # path(s) to load model
         self.result_dir = [os.path.join(  # path(s) to save model
             'results_test',
             'lda_nn',
             'subj' + str(i),
-            'spatiotemporalPFI') for i in range(n)]
+            'sliding_channels') for i in range(n)]
         self.model = LDA  # class of model to use
         self.dataset = CichyData  # dataset class for loading and handling data
         self.max_trials = 1.0  # ratio of training data (1=max)
@@ -45,20 +41,18 @@ class Args:
         self.num_classes = 118  # number of classes for classification
         self.dim_red = 80  # number of pca/learnt pca components
         # for channel reduction
-        self.load_conv = [os.path.join(
-            'results_test',
-            'neural_network',
-            'subj' + str(i),
-            'model_end.pt') for i in range(n)]  # path to trained neural network from which
+        self.load_conv = 'n'  # path to trained neural network from which
         # to extract the learnt pca layer
-        self.halfwin = 5  # half window size for temporal PFI
+        # if set to False, pca is used instead
+        # (set to 'any text' if no pca desired)
+        self.halfwin = 25  # half window size for temporal PFI
         # and/or half window size for sliding window LDA
 
         # dataset arguments
         data_path = os.path.join('data', 'preproc')
         self.data_path = [os.path.join(data_path, 'subj' + str(i))
                           for i in range(n)]  # path(s) to data directory
-        self.num_channels = list(range(307))  # channel indices
+        self.num_channels = list(range(306))  # channel indices
         # this is normally 306, but has to be 307 when loading data
         # with self.load_data
         self.numpy = True  # whether data is saved in numpy format
@@ -71,21 +65,19 @@ class Args:
         self.save_data = True  # whether to save the created data
         self.dump_data = [os.path.join(d, 'data_files', 'c')
                           for d in self.data_path]  # path(s) for saving data
-        self.load_data = self.dump_data  # path(s) for loading data files
+        self.load_data = ''#self.dump_data  # path(s) for loading data files
         # once data has been created once just set load_data to dump_data
         # in subsequent runs on the same data
 
         # PFI arguments
-        self.closest_chs = 'examples/closest4'  # path to a file containing
-        # closest n channels for each channel as a list
+        self.closest_chs = 20  # channel neighbourhood size for spatial PFI
         self.PFI_inverse = False  # corresponds to the inverse PFI mehtod
         # described in the paper
-        self.pfich_timesteps = [[i-5, i+5] for i in range(5, 45)]  # time window for spatiotemporal PFI
-        self.PFI_perms = 10  # number of PFI permutations
+        self.pfich_timesteps = [0, 256]  # time window for spatiotemporal PFI
+        self.PFI_perms = 20  # number of PFI permutations
         self.halfwin_uneven = False  # whether to use even or uneven window
-        self.PFI_val = True  # whether to perform PFI on validation data
-        self.chn_multi = 3  # set to 3 for elekta data: 2 grads + 1 mag
-        # these are treated as one "channel" for PFI
+
+
 
         '''
         .
@@ -141,8 +133,6 @@ class Args:
         self.decode_peak = 0.1
 
         # simulation arguments
-        self.PFI_step = 1
-        self.kernelPFI = False
         self.nonlinear_prenoise = True
         self.nonlinear_data = True
         self.seconds = 3000

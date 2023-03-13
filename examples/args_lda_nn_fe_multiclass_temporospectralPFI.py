@@ -9,7 +9,7 @@ from classifiers_linear import LDA
 
 class Args:
     gpu = '1'  # cuda gpu index
-    func = {'PFIch': True}  # dict of functions to run from training.py
+    func = {'PFIfreq_ts': True}  # dict of functions to run from training.py
 
     def __init__(self):
         n = 1  # can be used to do multiple runs, e.g. over subjects
@@ -26,7 +26,7 @@ class Args:
             'results_test',
             'lda_nn',
             'subj' + str(i),
-            'spatiotemporalPFI') for i in range(n)]
+            'temporospectralPFI') for i in range(n)]
         self.model = LDA  # class of model to use
         self.dataset = CichyData  # dataset class for loading and handling data
         self.max_trials = 1.0  # ratio of training data (1=max)
@@ -51,7 +51,7 @@ class Args:
             'subj' + str(i),
             'model_end.pt') for i in range(n)]  # path to trained neural network from which
         # to extract the learnt pca layer
-        self.halfwin = 5  # half window size for temporal PFI
+        self.halfwin = 1  # half window size for temporal PFI
         # and/or half window size for sliding window LDA
 
         # dataset arguments
@@ -76,16 +76,14 @@ class Args:
         # in subsequent runs on the same data
 
         # PFI arguments
-        self.closest_chs = 'examples/closest4'  # path to a file containing
-        # closest n channels for each channel as a list
+        self.closest_chs = 20  # channel neighbourhood size for spatial PFI
         self.PFI_inverse = False  # corresponds to the inverse PFI mehtod
         # described in the paper
-        self.pfich_timesteps = [[i-5, i+5] for i in range(5, 45)]  # time window for spatiotemporal PFI
+        self.pfich_timesteps = 5  # time window for spatiotemporal PFI
         self.PFI_perms = 10  # number of PFI permutations
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.PFI_val = True  # whether to perform PFI on validation data
-        self.chn_multi = 3  # set to 3 for elekta data: 2 grads + 1 mag
-        # these are treated as one "channel" for PFI
+
 
         '''
         .

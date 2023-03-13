@@ -542,7 +542,7 @@ class WavenetFullTest(WavenetFullEmbPca):
         if self.args.cond_channels > 0:
             # cond: B x E x T
             cond_ind = data['condition']
-            cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
+            cond = self.cond_emb(cond_ind.squeeze(1)).permute(0, 2, 1)
 
             # set elements of cond to 0 where cond_ind is 0
             cond = cond * (cond_ind > 0).float()
@@ -930,6 +930,7 @@ class WavenetFullChannel(WavenetFullTest):
             inputs = data[:, t-shift:t].reshape(1, channels, -1)
             cond_ex = cond[:, :, t-shift:t]
             out = self.forward({'inputs': inputs, 'condition': cond_ex})
+            out = out.detach()
 
             # apply softmax to get probabilities
             out = F.softmax(out, dim=-1)

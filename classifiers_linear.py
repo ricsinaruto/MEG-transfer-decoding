@@ -51,9 +51,9 @@ class LDA:
                 self.spatial_conv = model.spatial_conv
             except Exception:
                 # print stack trace
-                #exc_type, exc_value, exc_traceback = sys.exc_info()
-                #traceback.print_exception(exc_type, exc_value, exc_traceback,
-                #                          limit=2, file=sys.stdout)
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                traceback.print_exception(exc_type, exc_value, exc_traceback,
+                                          limit=2, file=sys.stdout)
 
                 print('Couldn\'t load conv model for lda.')
 
