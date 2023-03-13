@@ -13,7 +13,6 @@ General PhD research code for modeling and decoding M/EEG data. Expect bugs and 
   
 ## Table of Contents
 - [Usage](#usage)
-- [Multi-run modes](#multi-run-modes)
 - [Data](#data)
 - [Models](#models)
 - [Examples](#examples)
@@ -47,7 +46,7 @@ Some relevant functions that are available:
 
 Generally a model and dataset (specified in the corresponding variables in ```args.py```) is required to run anything. The dataset class used for this paper is always ```CichyData```.
 
-## Multi-run modes
+### Multi-run modes
 To facilitate running multiple trainings with the same command, the following variables in ```args.py``` can be lists:  
 ```load_model```, ```result_dir```, ```data_path```, ```dump_data```, ```load_data```, ```subjects_data```  
 This allows for e.g. running the same model on multiple subjects with a single call.
@@ -108,7 +107,7 @@ Please note that the variable "n" in the args files can be used to control the n
 
 When running multiple trainings or analyses on the same dataset the ```load_data``` and ```num_channels``` arguments should be set as described in the [Arguments](#arguments) section, for faster data loading. This is already included in the example args files running PFI.  
 
-Modifying these scripts to, for example, run on the 92-class data is easy as only the data-path and num_classes has to be modified as demonstrated by the ```args_cichy92_lda_pca_fe_multiclass.py``` script. If other [models](#models) are desired, such as SVM, only the ```model``` arguments needs to be changed. Further arguments and their behaviour can be explored in the [Arguments](#arguments) section, such as window size, pca dimension, number of classes, etc.
+Modifying these scripts to, for example, run on the 92-class data is easy as only the ```data_path``` and ```num_classes``` has to be modified as demonstrated by the ```args_cichy92_lda_pca_fe_multiclass.py``` script. If other [models](#models) are desired, such as SVM, only the ```model``` arguments needs to be changed. Further arguments and their behaviour can be explored in the [Arguments](#arguments) section, such as window size, pca dimension, number of classes, etc.
 
 ### Visualizations
 After running some the example scripts in the previous section, one can use the ```notebooks/mvpa_paper_tutorial.ipynb``` jupyter notebook to produce most of the figures in the paper. The paths for some of the figures are pre-set so that it seamlessly loads the results from the examples scripts, while for other figures manually setting the correct paths might be required.
@@ -166,6 +165,8 @@ This is an active research repository and contains multiple projects in addition
 Other neural networks can be used, with the only requirement being that they have a ```loss``` function which accepts the specified arguments and returns a dictionary of losses/accuracies. The ```__init__``` function should accept an ```Args``` object which stores all arguments. We recommend sublcassing the ```SimpleClassifier``` class.  
 
 Dataset classes for other datasets can be implemented, however CichyData is very general and will work with any EEG/MEG epoched data that is saved in the required format (see the ```data_path``` argument).
+
+Additional behaviour can be easily achieved and controlled by creating extra arguments in the ```Args``` class, which then are accessible in the dataset and model classes. Additional functionality can be implemented by registering a new function at the end of ```training.py```. This can then be accessed from the ```func``` dictionary in ```Args```.
 
 ## Authors
 * **[Richard Csaky](https://ricsinaruto.github.io)**
