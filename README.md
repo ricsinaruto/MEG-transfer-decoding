@@ -1,5 +1,5 @@
 # MEG-transfer-decoding
-General PhD research code for modeling and decoding M/EEG data. This readme describes how to reproduce results in [Interpretable full-epoch multiclass decoding for M/EEG](https://arxiv.org/abs/2205.14102). We propose that a full-epoch multiclass model is better than sliding window and/or pairwise models for decoding visual stimuli, and we show how it can be used for multivariate pattern analysis (MVPA) through permutation feature importance (PFI).
+General PhD research code for modeling and decoding M/EEG data. Expect bugs and unexpected behaviour. This readme describes how to reproduce results in [Interpretable full-epoch multiclass decoding for M/EEG](https://arxiv.org/abs/2205.14102). We propose that a full-epoch multiclass model is better than sliding window and/or pairwise models for decoding visual stimuli, and we show how it can be used for multivariate pattern analysis (MVPA) through permutation feature importance (PFI).
 
 **Since this repository is constantly evolving and contains a lot of other projects, make sure you are using the code version ([v0.1-paper](https://github.com/ricsinaruto/MEG-transfer-decoding/tree/v0.1-paper)) specifically created for the publication.**
 
@@ -16,9 +16,8 @@ General PhD research code for modeling and decoding M/EEG data. This readme desc
 - [Multi-run modes](#multi-run-modes)
 - [Data](#data)
 - [Models](#models)
-- [Arguments](#arguments)
 - [Examples](#examples)
-- [Visualizations](#visualizations)
+- [Arguments](#arguments)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -80,8 +79,43 @@ The following classification models are available in *classifiers_linear.py*:
 * ```QDA```: Implements the Quadratic Discriminant Analysis model.
 
 
+## Examples
+To replicate some of the results in the paper we provide args files in the examples folder. To try these out on the publicly available MEG data, follow these steps:  
+1. ```python scripts/cichy_download.py``` to download data. (Use ```scripts/cichy92_download.py``` for the 92-class dataset)
+2. ```python scripts/cichy_preproc_epoched.py``` to preprocess data. (Use ```scripts/cichy92_preproc_epoched.py``` for the 92-class dataset)
+3. Copy the contents of the example args file you want to run into ```args.py```
+4. ```python launch.py```
+
+The following example args files are available (all args files are for the 118-class dataset, except when cichy92 is in the file name):
+* ```args_nn.py```: trains the neural network model on full-epoch data.
+* ```args_lda_pca_fe_multiclass.py```: trains the LDA-PCA multiclass model on full-epoch data.
+* ```args_lda_pca_sw_multiclass.py```: trains the LDA-PCA multiclass sliding window model.
+* ```args_lda_nn_fe_multiclass.py```: trains the LDA-NN multiclass model on full-epoch data.
+* ```args_lda_nn_sw_multiclass.py```: trains the LDA-NN multiclass sliding window model.
+* ```args_lda_nn_chn_multiclass.py```: trains separate LDA models on individual channels of the full-epoch data.
+* ```args_lda_nn_fe_pairwise.py```: train the LDA-NN full-epoch model for pairwise classification.
+* ```args_lda_nn_fe_multiclass2pairwise.py```: Loads a previously trained multiclass full-epoch LDA-NN model and computes pairwise accuracies on the validation data.
+* ```args_lda_nn_fe_multiclass_temporalPFI.py```: Loads a previously trained multiclass full-epoch LDA-NN model and runs temporal PFI.
+* ```args_lda_nn_fe_multiclass_spatialPFI.py```: Loads a previously trained multiclass full-epoch LDA-NN model and runs spatial PFI.
+* ```args_lda_nn_fe_multiclass_spatiotemporalPFI.py```: Loads a previously trained multiclass full-epoch LDA-NN model and runs spatiotemporal PFI.
+* ```args_lda_nn_fe_multiclass_spectralPFI.py```: Loads a previously trained multiclass full-epoch LDA-NN model and runs spectral PFI.
+* ```args_lda_nn_fe_multiclass_temporospectralPFI.py```: Loads a previously trained multiclass full-epoch LDA-NN model and runs temporospectral PFI.
+* ```args_cichy92_lda_pca_fe_multiclass.py```: trains the LDA-PCA multiclass model on full-epoch data of the 92-class dataset.
+
+Steps 1 and 2 can be skipped if running on non-public data. The relevant data paths in the args file have to modified in this case. Note that results from running the examples will not 100% reproduce our results, because we used the raw continuous MEG data. Also, different random seeds may cause (very) small differences.
+
+Please note that the variable "n" in the args files can be used to control the number of subjects. This is set to 1 by default for just trying out the methods. If you want to run on all 15 subjects just change this to 15 in one of the example args files and the whole pipeline will be run on each subject automatically.  
+
+When running multiple trainings or analyses on the same dataset the ```load_data``` and ```num_channels``` arguments should be set as described in the [Arguments](#arguments) section, for faster data loading. This is already included in the example args files running PFI.  
+
+Modifying these scripts to, for example, run on the 92-class data is easy as only the data-path and num_classes has to be modified as demonstrated by the ```args_cichy92_lda_pca_fe_multiclass.py``` script. If other [models](#models) are desired, such as SVM, only the ```model``` arguments needs to be changed. Further arguments and their behaviour can be explored in the [Arguments](#arguments) section, such as window size, pca dimension, number of classes, etc.
+
+### Visualizations
+After running some the example scripts in the previous section, one can use the ```notebooks/mvpa_paper_tutorial.ipynb``` jupyter notebook to produce most of the figures in the paper. The paths for some of the figures are pre-set so that it seamlessly loads the results from the examples scripts, while for other figures manually setting the correct paths might be required.
+
+
 ## Arguments
-This section describes the behaviour of some arguments in the args.py file.  
+This section describes the behaviour of some arguments in the ```args.py``` file.  
 ### Experiment arguments:  
 * ```load_model```: Path(s) to load a trained model file from. Can be a single path or a list of path(s) when using multi-run mode, pointing to for example different subjects. When running PFI analysis this argument should be specified. If this is None, then a new model will be initialized based on the ```model``` argument.
 * ```result_dir```: Path(s) where model and other analysis outputs should be saved. Behaviour is similar to ```load_model```. Cannot be empty.
@@ -101,7 +135,7 @@ This section describes the behaviour of some arguments in the args.py file.
 
 ### Classification (task) arguments:
 * ```sample_rate```: Start and end timesteps for cropping trials. [0, -1] would select the full trial.
-* ```num_classes```: 118 for the 118-class dataset, or 92 for the 92-class dataset.
+* ```num_classes```: 118 for the 118-class dataset, or 92 for the 92-class dataset. Alternatively if one wants to use only a subset of the conditions, this can be set to a lower number which will automatically only load the first x classes.
 * ```dim_red```: This is either the number of components used in LDA-PCA, or the size of the dimensionality reduction layer in the neural network (and in LDA-NN).
 * ```load_conv```: Path(s) to trained neural network from which the dimensionality layer will be extracted for use in LDA-NN. Can be a list to facilitate running over multiple subjects. If False, LDA-PCA will be run. A third mode can be achieved by setting this to a non-existent path, whereby no dimensionality reduction or pca will be applied to the data, and thus LDA is run on the raw data.
 * ```halfwin```: This is half the window size for sliding-window models, e.g. at a sampling rate of 100Hz set this to 5, to get a 100ms window. Importantly, if full-epoch modeling is desired this should be set to half the size of the ```sample_rate``` range. This parameter has two more uses depending on running mode. When running temporal PFI it controls the window size for permuting (similar to sliding-window decoding). When running spectral PFI it controls the frequency band width, so should be set to 0 if maximum frequency sensitivity is desired.
@@ -125,25 +159,13 @@ This section describes the behaviour of some arguments in the args.py file.
 * ```PFI_perms```: Number of times to compute PFI with different permutations.
 * ```PFI_val```: Whether to run PFI on validation or training data. Normally set to True.
 
-## Examples
-To replicate some of the results in the paper we provide args files in the examples folder. To try these out on the publicly available MEG data, follow these steps:  
-1. ```python scripts/cichy_download.py``` to download data.
-2. ```python scripts/cichy_preproc_epoched.py``` to preprocess data.
-3. Copy the contents of the example args file you want to run into ```args.py```
-4. ```python launch.py```
-
-The following example args files are available:
-* ```args_linear_subject.py```: trains 
-
-Steps 1 and 2 can be skipped if running on non-public data. The relevant data paths in the args file have to modified in this case. Note that results from running the examples will not 100% reproduce our results, because we used the raw continuous MEG data. Also, different random seeds may cause (very) small differences.
-
-Please note that the variable "n" in the args files controls the number of subjects. This is set to 1 by default. If you want to run on all 15 subjects just change this to 15.
-
-## Visualizations
-
 
 ## Contributing
+This is an active research repository and contains multiple projects in addition to the code described in this readme relevant to the paper. Thus the pipeline is very general and easily extendable to other models/datasets. For example implementing other sklearn classifiers is easy by just subclassing the ```LDA``` class and updating the ```init_model``` function with the relevant classifier.  
 
+Other neural networks can be used, with the only requirement being that they have a ```loss``` function which accepts the specified arguments and returns a dictionary of losses/accuracies. The ```__init__``` function should accept an ```Args``` object which stores all arguments. We recommend sublcassing the ```SimpleClassifier``` class.  
+
+Dataset classes for other datasets can be implemented, however CichyData is very general and will work with any EEG/MEG epoched data that is saved in the required format (see the ```data_path``` argument).
 
 ## Authors
 * **[Richard Csaky](https://ricsinaruto.github.io)**
