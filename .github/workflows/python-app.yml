@@ -43,16 +43,17 @@ jobs:
     - name: Download data
       if: steps.cache.outputs.cache-hit != 'true'
       run: |
-        python scripts/cichy_download.py 2
-        python scripts/cichy_preproc_epoched.py 2
-        python scripts/cichy92_download.py 2
-        python scripts/cichy92_preproc_epoched.py 2
+        python scripts/cichy_download.py 1
+        python scripts/cichy_preproc_epoched.py 1
+        python scripts/cichy92_download.py 1
+        python scripts/cichy92_preproc_epoched.py 1
     - name: Cache data
       uses: actions/cache/save@v3
       with:
         path: data
         key: ${{ steps.cahce-data-restore.outputs.cache-primary-key }} # key to identify the cache
 
-    - name: Test with pytest
+    - name: args_lda_pca_fe_multiclass
       run: |
-        pytest test_mvpa_examples.py
+        cp examples/args_lda_pca_fe_multiclass.py args.py
+        python launch.py
