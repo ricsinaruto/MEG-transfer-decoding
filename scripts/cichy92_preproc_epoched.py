@@ -1,9 +1,10 @@
 import numpy as np
 import os
 import mne
+import sys
 from scipy.io import loadmat
 
-for subj in range(1, 17):
+for subj in range(1, int(sys.argv[1])+1):
     sid = str(subj - 1)
     print('Preprocessing subj ', sid)
     output_directory = os.path.join('data', 'cichy92', 'preproc', 'subj' + sid)

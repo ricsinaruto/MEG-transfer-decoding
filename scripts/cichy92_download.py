@@ -1,6 +1,7 @@
 import os
 import requests
 import tarfile
+import sys
 from clint.textui import progress
 
 from scripts.cichy_download import download_data
@@ -9,7 +10,7 @@ from scripts.cichy_download import download_data
 if not os.path.exists('data'):
     os.mkdir('data')
 
-for i in range(1, 17):
+for i in range(1, int(sys.argv[1])+1):
     print('Downloading subject ', str(i))
 
     url = ('http://wednesday.csail.mit.edu/MEG1_MEG_Epoched_Raw_Data/Tars/' +

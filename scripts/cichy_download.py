@@ -1,6 +1,7 @@
 import os
 import requests
 import tarfile
+import sys
 from clint.textui import progress
 
 
@@ -26,7 +27,8 @@ def download_data(url, zipped_path, extract):
 if not os.path.exists('data'):
     os.mkdir('data')
 
-for i in range(1, 16):
+# download data, number of subjects given by first script argument
+for i in range(1, int(sys.argv[1])+1):
     print('Downloading subject ', str(i))
 
     url = ('http://wednesday.csail.mit.edu/MEG2_MEG_Epoched_Raw_Data/Tars/' +
