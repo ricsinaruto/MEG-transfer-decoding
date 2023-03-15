@@ -45,8 +45,7 @@ jobs:
       run: |
         python scripts/cichy_download.py 1
         python scripts/cichy_preproc_epoched.py 1
-        python scripts/cichy92_download.py 1
-        python scripts/cichy92_preproc_epoched.py 1
+        rm -r data/scratch
     - name: Cache data
       uses: actions/cache/save@v3
       with:
