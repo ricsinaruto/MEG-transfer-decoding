@@ -219,14 +219,6 @@ class SimpleClassifier(Module):
         out_class = torch.argmax(out_class, dim=-1)
         return losses, (out_class, out_pred), targets
 
-    def loss_(self, x, i=0, sid=None, train=True, criterion=None):
-        # only used for diagnostic purposes
-        tr = 'train' if train else 'val'
-        loss = loss.detach().cpu().numpy()
-        self.losses[tr] = np.concatenate((self.losses[tr], loss))
-        self.inputs.append(inputs.cpu().numpy())
-        self.targets.append(targets.cpu().numpy())
-
 
 class SimpleClassPred(WavenetFull):
     def build_model(self, args):

@@ -322,7 +322,7 @@ def plot_cov(covariance, name):
         plt.close('all')
 
 
-def test():
+def test(trial_list=[]):
     num_examples = 3533
     num_channels = pca_components
     sequence_length = 250

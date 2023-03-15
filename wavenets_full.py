@@ -671,7 +671,7 @@ class WavenetFullTestSemb(WavenetFullTest):
         if self.args.embedding_dim > 0:
             # get subject-specific covariance
             covs = self.covs[data['sid'].reshape(-1)]
-            covs = covs.reshape(x.shape[0], -1, covs.shape[1])
+            covs = covs.reshape(covs.shape[0], -1, covs.shape[1])
 
             # project to embedding space
             embs = self.subject_emb(covs)
@@ -1151,7 +1151,7 @@ class WavenetFullChannelMixSemb(WavenetFullChannelMix, WavenetFullTestSemb):
         if self.args.embedding_dim > 0:
             # get subject-specific covariance
             covs = self.covs[data['sid'].reshape(-1)]
-            covs = covs.reshape(x.shape[0], -1, covs.shape[1])
+            covs = covs.reshape(covs.shape[0], -1, covs.shape[1])
 
             # project to embedding space
             embs = self.subject_emb(covs)
