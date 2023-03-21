@@ -83,10 +83,12 @@ The following classification models are available in *classifiers_linear.py*:
 
 ## Examples
 To replicate some of the results in the paper we provide args files in the examples folder. To try these out on the publicly available MEG data, follow these steps:  
-1. ```python scripts/cichy_download.py``` to download data. (Use ```scripts/cichy92_download.py``` for the 92-class dataset)
-2. ```python scripts/cichy_preproc_epoched.py``` to preprocess data. (Use ```scripts/cichy92_preproc_epoched.py``` for the 92-class dataset)
+1. ```python scripts/cichy_download.py 1``` to download data. (Use ```scripts/cichy92_download.py 1``` for the 92-class dataset)
+2. ```python scripts/cichy_preproc_epoched.py 1``` to preprocess data. (Use ```scripts/cichy92_preproc_epoched.py 1``` for the 92-class dataset)
 3. Copy the contents of the example args file you want to run into ```args.py```
 4. ```python launch.py```
+
+Replace 1 with the number of subjects you want to download/preprocess.
 
 The following example args files are available (all args files are for the 118-class dataset, except when cichy92 is in the file name):
 * ```args_nn.py```: trains the neural network model on full-epoch data.
@@ -178,20 +180,18 @@ Additional behaviour can be easily achieved and controlled by creating extra arg
 This project is licensed under the MIT License - see the [LICENSE](https://github.com/ricsinaruto/MEG-group-decode/blob/master/LICENSE) file for details.  
 Please include a link to this repo if you use any of the dataset or code in your work and consider citing the following papers:
 ```
-@article{Csaky:2022,
-    title = {Generalizing Brain Decoding Across Subjects with Deep Learning},
-    author = {Csaky, Richard and Van Es, Mats and Jones, Oiwi Parker and Woolrich, Mark},
-    year = {2022},
-    url = {https://arxiv.org/abs/2205.14102},
-    journal	= {arXiv preprint arXiv:2205.14102},
-    publisher = {arXiv}
+@article{csaky2022group,
+  title={Group-level Brain Decoding with Deep Learning},
+  author={Csaky, Richard and Van Es, Mats and Jones, Oiwi Parker and Woolrich, Mark},
+  journal={arXiv preprint arXiv:2205.14102},
+  year={2022}
 }
-@article{Csaky:2022,
-    title = {Interpretable full-epoch multiclass decoding for M/EEG},
-    author = {Csaky, Richard and Van Es, Mats and Jones, Oiwi Parker and Woolrich, Mark},
-    year = {2022},
-    url = {https://arxiv.org/abs/2205.14102},
-    journal	= {arXiv preprint arXiv:2205.14102},
-    publisher = {arXiv}
+@article{csaky2023interpretable,
+  title={Interpretable full-epoch multiclass decoding for M/EEG},
+  author={Csaky, Richard and van Es, Mats WJ and ParkerJones, Oiwi and Woolrich, Mark W},
+  journal={bioRxiv},
+  pages={2023--03},
+  year={2023},
+  publisher={Cold Spring Harbor Laboratory}
 }
 ```
