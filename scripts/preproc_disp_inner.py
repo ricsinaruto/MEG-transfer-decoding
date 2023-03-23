@@ -29,10 +29,10 @@ event_dict = {#'event_off':1,
 
 # NEED TO INTERPOLATE BAD CHANNELS
 
-dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/oslpy'
-outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc45hz_badchan/inner_think_sub_2s'
+dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc25hz/oslpy/task_part1_rc_raw_tsss_mc'
+outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc25hz/inner_speech_sub'
 #files = [f for f in os.listdir(dataset_path) if 'raw.fif' in f]
-files = ['task_part1_rc_raw_tsss_mc_raw.fif']
+files = ['task_part1_rc_tsss_mc_preproc_raw.fif']
 for f in files:
     raw = mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=True)
 
@@ -45,7 +45,7 @@ for f in files:
     count2 = 0
     new_events = []
     for i, (et, ec) in enumerate(zip(event_t, event_c)):
-        '''
+
         if ec < 7 and ec > 1:
             count1 += 1
             if event_c[i+2] == 8:
@@ -64,7 +64,7 @@ for f in files:
                 new_events.append(np.array([event_t[i+5], 0, ec]))
             else:
                 print('error4')
-        '''
+
 
         if ec < 16 and ec > 10:
             count2 += 1
@@ -101,6 +101,10 @@ for f in files:
     #raw = raw.pick_channels(['MEG1213', 'MEG0612', 'MEG0423', 'MEG2322', 'MEG0232', 'MEG2612', 'MEG2532', 'MEG0722', 'MEG1143', 'MEG1022', 'MEG0513', 'MEG1212',
     #                         'MEG0743', 'MEG1723', 'MEG2012', 'MEG1613', 'MEG2042', 'MEG2523', 'MEG1832', 'MEG1543', 'MEG2333', 'MEG1443', 'MEG1943', 'MEG0533'])
 
+    # drop bad channels
+    raw = raw.drop_channels(raw.info['bads'])
+    print(len(raw.ch_names))
+
     epochs = mne.Epochs(raw,
                         new_events,
                         event_id=event_dict,
@@ -111,7 +115,7 @@ for f in files:
                         reject=None,
                         preload=True)
 
-    epochs.drop_bad()
+    #epochs.drop_bad()
 
     #scaler = mne.decoding.Scaler(scalings='mean')
     #scaler.fit(epochs.get_data())

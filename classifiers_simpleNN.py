@@ -9,7 +9,6 @@ from torch.nn import Linear, Sequential, Module, Dropout, Conv1d
 from torch.nn import CrossEntropyLoss, Embedding
 
 from wavenets_full import WavenetFull
-from cichy_data import mulaw_inv
 
 
 def accuracy(out_class, y):
@@ -152,7 +151,8 @@ class SimpleClassifier(Module):
             args.num_channels = 306
             num_samples = 100
             self.eval()
-            self.criterion_class_nored = CrossEntropyLoss(reduction='none').cuda()
+            self.criterion_class_nored = CrossEntropyLoss(reduction='none')
+            self.criterion_class_nored = self.criterion_class_nored.cuda()
 
             # create a batch of random inputs
             x = torch.randn(
@@ -163,7 +163,7 @@ class SimpleClassifier(Module):
             # add target classes to the 2nd dimension of x
             y = torch.randint(0, args.num_classes, (num_samples,)).cuda()
             x = torch.cat((x, y.reshape(-1, 1, 1).repeat(1, 1, x.shape[2])),
-                        dim=1)
+                          dim=1)
 
             x.retain_grad()
 
@@ -247,7 +247,8 @@ class SimpleClassPred(WavenetFull):
                 (B,C,T) for local conditions. None if unused
             causal_pad: Whether or not to perform causal padding.
         Returns:
-            logits: (B,Q,T) tensor of logits. Note that the t-th temporal output
+            logits: (B,Q,T) tensor of logits. Note that
+                the t-th temporal output
                 represents the distribution over t+1.
             encoded: same as `.encode`.
         """
@@ -255,7 +256,7 @@ class SimpleClassPred(WavenetFull):
 
         '''
         Initially train without condition to be able to compare later.
-        '''
+        
         # cond: B x E x T
         #cond_ind = data['condition']
         #cond = self.cond_emb(cond_ind.squeeze()).permute(0, 2, 1)
@@ -265,6 +266,7 @@ class SimpleClassPred(WavenetFull):
 
         # concatenate cond to x
         #x = torch.cat((x, cond), dim=1)
+        '''
 
         # apply quantization embedding to x
         x = x @ self.quant_emb.weight
@@ -286,7 +288,8 @@ class SimpleClassPred(WavenetFull):
         return x
 
     def loss(self, data, i=0, sid=None, train=True, criterion=None):
-        losses, pred_cont, target_cont = super().loss(data, i, sid, train, criterion)
+        losses, pred_cont, target_cont = super().loss(
+            data, i, sid, train, criterion)
 
         '''
         if i == 0 and train:
@@ -329,7 +332,6 @@ class SimpleClassFakeLoss(SimpleClassPred):
         targets = data['targets']
         targets = targets[:, :, -logits.shape[-2]:]
 
-        shape = targets.shape
         targets = targets.reshape(-1)
 
         loss = torch.sum(logits[0])
@@ -357,9 +359,7 @@ class SimpleClassAutoregcheck(SimpleClassPred):
         targets = targets[:, :, -logits.shape[-2]:]
         logits = logits[:, :, -1, :]
         targets = targets[:, :, -1]
-        
 
-        shape = targets.shape
         targets = targets.reshape(-1)
         logits = logits.reshape(-1, logits.shape[-1])
 

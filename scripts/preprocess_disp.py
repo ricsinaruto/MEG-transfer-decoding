@@ -6,14 +6,12 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/RC/reading_only"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/RC/reading_only/preproc25hz"
+dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter"
+outdir = "/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc25hz"
 
 osl_outdir = os.path.join(outdir, 'oslpy')
 report_dir = os.path.join(osl_outdir, 'report')
 os.makedirs(report_dir, exist_ok=True)
-
-decim = 10
 
 config_text = """
 meta:
@@ -45,12 +43,13 @@ meta:
         words/pain: 6
 preproc:
   - filter:         {l_freq: 1, h_freq: 25, method: 'iir', iir_params: {order: 5, ftype: butter}}
+  - resample:       {sfreq: 100}
   - bad_channels:   {picks: 'mag'}
   - bad_channels:   {picks: 'grad'}
   - bad_segments:   {segment_len: 800, picks: 'mag'}
   - bad_segments:   {segment_len: 800, picks: 'grad'}
   - ica_raw:        {picks: 'meg', n_components: 64}
-  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
+  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation'}
   - find_events:    {min_duration: 0.002}
 """
 
@@ -77,6 +76,7 @@ raws = mne.concatenate_raws(raws, preload=True)
 config = yaml.load(config_text, Loader=yaml.FullLoader)
 dataset = osl.preprocessing.run_proc_chain(config, raws, outdir=osl_outdir, overwrite=True, gen_report=True)
 
+'''
 print(raws.info)
 raw = dataset['raw']
 
@@ -120,3 +120,4 @@ for epoch, event in zip(epochs, epochs.events):
     n_trials = int(len(os.listdir(f"{outdir}/cond{event_id-2}")))
     np.save(f"{outdir}/cond{event_id-2}/trial{n_trials}.npy", data)
     #savemat(f"{outdir}/cond{event_id-2}/trial{n_trials}.mat", {'X': data})
+'''
