@@ -45,6 +45,7 @@ jobs:
         python scripts/cichy92_download.py 1
         python scripts/cichy92_preproc_epoched.py 1
         rm -r data/scratch
+        rm -r data/cichy92/subj01
     - name: Cache data
       uses: actions/cache/save@v3
       with:
@@ -54,4 +55,25 @@ jobs:
     - name: args_lda_pca_fe_multiclass
       run: |
         cp examples/args_lda_pca_fe_multiclass.py args.py
-        python launch.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_pca_fe_multiclass.py
+    - name: args_lda_pca_sw_multiclass
+      run: |
+        cp examples/args_lda_pca_sw_multiclass.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_pca_sw_multiclass.py
+    - name: args_cichy92_lda_pca_fe_multiclass
+      run: |
+        cp examples/args_cichy92_lda_pca_fe_multiclass.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_cichy92_lda_pca_fe_multiclass.py
+    - name: nn
+      run: |
+        cp examples/args_nn.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_nn.py
+    - name: args_lda_nn_chn_multiclass
+      run: |
+        cp examples/args_lda_nn_chn_multiclass.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_chn_multiclass.py
