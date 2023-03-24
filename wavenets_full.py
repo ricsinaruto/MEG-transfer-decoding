@@ -1004,6 +1004,7 @@ class WavenetFullChannelMix(WavenetFullChannel):
             cond = cond.unsqueeze(1).repeat(1, self.args.num_channels, 1, 1)
             cond = cond.reshape(-1, cond.shape[-2], cond.shape[-1])
 
+        # specify type of cond as tensor
         return cond
 
     def forward(self, data, causal_pad=False):

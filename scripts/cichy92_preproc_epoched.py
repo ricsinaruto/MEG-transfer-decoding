@@ -4,6 +4,9 @@ import mne
 import sys
 from scipy.io import loadmat
 
+base_path = os.path.join('data', 'cichy92', 'scratch', 'rmcichy', 'FUB',
+                         'MEG1_long_baseline_MEG_Clean_Data_short_trials_from_long',
+                         'MEG_trials')
 for subj in range(1, int(sys.argv[1])+1):
     sid = str(subj - 1)
     print('Preprocessing subj ', sid)
@@ -11,8 +14,7 @@ for subj in range(1, int(sys.argv[1])+1):
     os.makedirs(output_directory)
 
     for sess in range(1, 3):
-        raw_data = os.path.join(
-            'data', 'cichy92', f'subj{subj:02d}', f'sess{sess:02d}')
+        raw_data = os.path.join(base_path, f'subj{subj:02d}', f'sess{sess:02d}')
 
         epochs_mat = []
         event_id = []

@@ -67,7 +67,7 @@ jobs:
         cp examples/args_cichy92_lda_pca_fe_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_cichy92_lda_pca_fe_multiclass.py
-    - name: nn
+    - name: args_nn
       run: |
         cp examples/args_nn.py args.py
         taskset --cpu-list 12-23 python launch.py
@@ -77,3 +77,44 @@ jobs:
         cp examples/args_lda_nn_chn_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_chn_multiclass.py
+    - name: args_lda_nn_fe_multiclass
+      run: |
+        cp examples/args_lda_nn_fe_multiclass.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass.py
+    - name: args_lda_nn_sw_multiclass
+      run: |
+        cp examples/args_lda_nn_sw_multiclass.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_sw_multiclass.py
+    - name: args_lda_nn_fe_multiclass2pairwise
+      run: |
+        cp examples/args_lda_nn_fe_multiclass2pairwise.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass2pairwise.py
+    - name: args_lda_nn_fe_multiclass_spatialPFI
+      run: |
+        cp examples/args_lda_nn_fe_multiclass_spatialPFI.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass_spatialPFI.py
+    - name: args_lda_nn_fe_multiclass_spatiotemporal
+      run: |
+        cp examples/args_lda_nn_fe_multiclass_spatiotemporal.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass_spatiotemporal.py
+    - name: args_lda_nn_fe_multiclass_spectralPFI
+      run: |
+        cp examples/args_lda_nn_fe_multiclass_spectralPFI.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass_spectralPFI.py
+    - name: args_lda_nn_fe_multiclass_temporalPFI
+      run: |
+        cp examples/args_lda_nn_fe_multiclass_temporalPFI.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass_temporalPFI.py
+    - name: args_lda_nn_fe_multiclass_temporospectralPFI
+      run: |
+        cp examples/args_lda_nn_fe_multiclass_temporospectralPFI.py args.py
+        taskset --cpu-list 12-23 python launch.py
+        python tests/test_lda_nn_fe_multiclass_temporospectralPFI.py
+    
