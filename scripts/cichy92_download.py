@@ -10,6 +10,9 @@ from download import download_data
 if not os.path.exists('data'):
     os.mkdir('data')
 
+if not os.path.exists('data/cichy92'):
+    os.mkdir('data/cichy92')
+
 # check if there are any arguments
 subs = 1
 if len(sys.argv) > 1:
