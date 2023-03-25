@@ -21,8 +21,7 @@ class Args:
         self.result_dir = [os.path.join(  # path(s) to save model
             'results_test',
             'lda_pca',
-            'subj' + str(i),
-            'sliding_windows') for i in range(n)]
+            'subj' + str(i)) for i in range(n)]
         self.model = LDA  # class of model to use
         self.dataset = CichyData  # dataset class for loading and handling data
         self.max_trials = 1.0  # ratio of training data (1=max)
@@ -36,14 +35,14 @@ class Args:
         self.units = [800, 300]  # hidden layer sizes of fully-connected block
 
         # classification arguments
-        self.sample_rate = [0, 110]  # start and end of timesteps within trials
+        self.sample_rate = [10, 60]  # start and end of timesteps within trials
         # [10, 60] corresponds to 0 to 500 ms at 100 Hz
         self.num_classes = 118  # number of classes for classification
         self.dim_red = 80  # number of pca/learnt pca components
         # for channel reduction
         self.load_conv = False  # path to trained neural network from which
         # to extract the learnt pca layer
-        self.halfwin = 5  # half window size for temporal PFI
+        self.halfwin = 25  # half window size for temporal PFI
         # and/or half window size for sliding window LDA
 
         # dataset arguments

@@ -12,3 +12,8 @@ clint
 requests
 flake8
 pytest
+transformers
+PyWavelets
+hyperopt
+pyriemann
+xgboost

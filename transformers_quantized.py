@@ -9,7 +9,7 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 
 class TransformerQuantized(GPT2Model, WavenetFullChannelMix):
     def __init__(self, args):
-        super(GPT2Model, self).__init__(args.gpt2_config)
+        GPT2Model.__init__(self, args.gpt2_config)
         self.args = args
         self.build_model(args)
 

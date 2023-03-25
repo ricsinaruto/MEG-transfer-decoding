@@ -2,7 +2,7 @@ import os
 
 # load loss files
 directory = os.path.join('results_test', 'lda_pca', 'subj0', 'sliding_windows')
-values = os.path.join('test', 'results', 'lda_pca', 'subj0', 'sliding_windows')
+values = os.path.join('tests', 'results', 'lda_pca', 'subj0', 'sliding_windows')
 names = ['train', 'val', 'test']
 for name in names:
     path = os.path.join(directory, name + '_loss.txt')
