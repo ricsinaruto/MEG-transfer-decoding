@@ -36,7 +36,7 @@ jobs:
       uses: actions/cache/restore@v3
       with:
         path: data
-        key: ${{ runner.os }}-data-cichy-1 # key to identify the cache
+        key: Linux-data-cichy-1 # key to identify the cache
     - name: Download data
       if: steps.cache.outputs.cache-hit != 'true'
       run: |
@@ -50,7 +50,7 @@ jobs:
       uses: actions/cache/save@v3
       with:
         path: data
-        key: ${{ steps.cahce-data-restore.outputs.cache-primary-key }} # key to identify the cache
+        key: Linux-data-cichy-1 # key to identify the cache
 
     - name: args_lda_pca_fe_multiclass
       run: |
