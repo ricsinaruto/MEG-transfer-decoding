@@ -7,6 +7,7 @@ sys.path.append('..')
 from transformers_quantized import TransformerQuantized
 from args import Args
 from torch.nn import Linear, Embedding, CrossEntropyLoss, MSELoss
+import torch
 
 from transformers import GPT2Config
 
