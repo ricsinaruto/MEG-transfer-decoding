@@ -31,26 +31,10 @@ jobs:
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Restore cache data
-      id: cache-data-restore
-      uses: actions/cache/restore@v3
-      with:
-        path: data
-        key: Linux-data-cichy-1 # key to identify the cache
-    - name: Download data
-      if: steps.cache-data-restore.outputs.cache-hit != 'true'
+
+    - name: Get data
       run: |
-        python scripts/cichy_download.py 1
-        python scripts/cichy_preproc_epoched.py 1
-        python scripts/cichy92_download.py 1
-        python scripts/cichy92_preproc_epoched.py 1
-        rm -r data/scratch
-        rm -r data/cichy92/scratch
-    - name: Cache data
-      uses: actions/cache/save@v3
-      with:
-        path: data
-        key: Linux-data-cichy-1 # key to identify the cache
+        cp -r /well/woolrich/users/yaq921/MEG-transfer-decoding/data data
 
     - name: args_lda_pca_fe_multiclass
       run: |
