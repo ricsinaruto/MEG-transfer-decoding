@@ -200,7 +200,7 @@ class WavenetFull(WavenetSimple):
     '''
     The full wavenet model as described in the original paper
     '''
-    def __init__(self, args):
+    def __init__(self, args=None):
         super(WavenetFull, self).__init__(args)
         self.criterion = CrossEntropyLoss(reduction='none').cuda()
         self.mse_loss = torch.nn.MSELoss().cuda()
@@ -1065,6 +1065,11 @@ class WavenetFullChannelMix(WavenetFullChannel):
         out = out.permute(0, 1, 3, 2)
 
         return out
+
+
+class WavenetFullChannelMixMixin(WavenetFullChannelMix):
+    def __init__(self):
+        Module.__init__(self)
 
 
 class WavenetContrastiveChannelMix(WavenetFullChannelMix):

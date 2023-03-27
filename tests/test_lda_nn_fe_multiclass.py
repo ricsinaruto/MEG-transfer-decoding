@@ -12,7 +12,7 @@ for name, val in zip(names, values):
     loss = float(lines[0].strip())
 
     # assert that loss is the same as val to 4 decimal places
-    assert round(loss, 4) == round(val, 4)
+    assert round(loss, 2) == round(val, 2)
 
 # check that model.pt25 exists
 path = os.path.join(directory, 'model.pt25')

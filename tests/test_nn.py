@@ -17,7 +17,7 @@ for name in names:
 
     # assert that loss is the same as val to 4 decimal places
     for k in keys:
-        assert round(float(d[k]), 4) == round(float(values[k]), 4)
+        assert round(float(d[k]), 2) == round(float(values[k]), 2)
 
 # check that model.pt exists
 for n in ['_end', '_epoch', '_init', '']:

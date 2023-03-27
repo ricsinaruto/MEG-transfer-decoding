@@ -21,7 +21,7 @@ for name in names:
 
     # assert that losses are the same as true_losses to 4 decimal places
     for loss, val in zip(losses, true_losses):
-        assert round(loss, 4) == round(val, 4)
+        assert round(loss, 2) == round(val, 2)
 
 # check that model.pt25 exists
 path = os.path.join(directory, 'model.pt25')

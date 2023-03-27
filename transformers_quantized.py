@@ -2,14 +2,14 @@ from torch.nn import CrossEntropyLoss, Embedding, Linear
 from torch.nn.parameter import Parameter
 import torch
 
-from wavenets_full import WavenetFullChannelMix, WavenetFullTest
+from wavenets_full import WavenetFullChannelMixMixin, WavenetFullTest
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 
 
-class TransformerQuantized(GPT2Model, WavenetFullChannelMix):
+class TransformerQuantized(GPT2Model, WavenetFullChannelMixMixin):
     def __init__(self, args):
-        GPT2Model.__init__(self, args.gpt2_config)
+        super().__init__(args.gpt2_config)
         self.args = args
         self.build_model(args)
 
