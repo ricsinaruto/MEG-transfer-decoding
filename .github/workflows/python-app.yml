@@ -38,7 +38,7 @@ jobs:
         path: data
         key: Linux-data-cichy-1 # key to identify the cache
     - name: Download data
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.cache-data-restore.outputs.cache-hit != 'true'
       run: |
         python scripts/cichy_download.py 1
         python scripts/cichy_preproc_epoched.py 1
