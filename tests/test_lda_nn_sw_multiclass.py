@@ -21,7 +21,7 @@ for name in names:
 
     # assert that losses are the same as true_losses to 4 decimal places
     for loss, val in zip(losses, true_losses):
-        assert round(loss, 2) == round(val, 2)
+        assert abs(loss-val) < 0.005
 
 # check that model.pt5 ... model.pt105 exists
 for i in range(5, 105):

@@ -11,4 +11,4 @@ with open(path, 'r') as f:
 loss = float(lines[0].strip())
 
 # assert that loss is the same as val to 4 decimal places
-assert round(loss, 2) == round(val, 2)
+assert abs(loss-val) < 0.005
