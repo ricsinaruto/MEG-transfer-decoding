@@ -80,10 +80,7 @@ class Experiment:
             #self.args.dataset = self.dataset
         else:
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-            if args.from_pretrained:
-                self.model = args.model.from_pretrained(args)
-            else:
-                self.model = args.model(args)
+            self.model = args.model(args)
 
             try:
                 self.model = self.model.cuda()

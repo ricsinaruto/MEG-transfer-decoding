@@ -112,11 +112,15 @@ class TransformerQuantizedPretrained(TransformerQuantized):
     '''
     Same as TransformerQuantized, but uses the pretrained GPT2 model
     '''
+    def __init__(self, args):
+        super().__init__(args.gpt2_config)
+
     @classmethod
     def from_pretrained(cls, args):
         return super().from_pretrained('gpt2',
                                        args,
-                                       config=args.gpt2_config)
+                                       config=args.gpt2_config,
+                                       cache_dir=args.result_dir)
 
 
 class TransformerQuantizedConcatEmb(TransformerQuantized):

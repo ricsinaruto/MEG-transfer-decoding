@@ -17,3 +17,4 @@ PyWavelets
 hyperopt
 pyriemann
 xgboost
+sails
