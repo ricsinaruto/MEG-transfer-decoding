@@ -24,7 +24,6 @@ jobs:
         module load Anaconda3
         source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         python -m pip install --upgrade pip
-        which python
         pip install --upgrade -r requirements.txt
     - name: Lint with flake8
       run: |
@@ -35,6 +34,7 @@ jobs:
 
     - name: module tests
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         which python
         python -m pytest module_tests/*
 
@@ -44,66 +44,79 @@ jobs:
 
     - name: args_lda_pca_fe_multiclass
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_pca_fe_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_pca_fe_multiclass.py
     - name: args_lda_pca_sw_multiclass
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_pca_sw_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_pca_sw_multiclass.py
     - name: args_cichy92_lda_pca_fe_multiclass
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_cichy92_lda_pca_fe_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_cichy92_lda_pca_fe_multiclass.py
     - name: args_nn
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_nn.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_nn.py
     - name: args_lda_nn_chn_multiclass
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_chn_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_chn_multiclass.py
     - name: args_lda_nn_fe_multiclass
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass.py
     - name: args_lda_nn_sw_multiclass
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_sw_multiclass.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_sw_multiclass.py
     - name: args_lda_nn_fe_multiclass2pairwise
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass2pairwise.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass2pairwise.py
     - name: args_lda_nn_fe_multiclass_spatialPFI
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass_spatialPFI.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass_spatialPFI.py
     - name: args_lda_nn_fe_multiclass_spatiotemporal
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass_spatiotemporal.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass_spatiotemporal.py
     - name: args_lda_nn_fe_multiclass_spectralPFI
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass_spectralPFI.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass_spectralPFI.py
     - name: args_lda_nn_fe_multiclass_temporalPFI
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass_temporalPFI.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass_temporalPFI.py
     - name: args_lda_nn_fe_multiclass_temporospectralPFI
       run: |
+        source activate /well/woolrich/users/yaq921/.conda/envs/job_run
         cp examples/args_lda_nn_fe_multiclass_temporospectralPFI.py args.py
         taskset --cpu-list 12-23 python launch.py
         python tests/test_lda_nn_fe_multiclass_temporospectralPFI.py
