@@ -60,7 +60,7 @@ class TransformerQuantized(GPT2Model, WavenetFullChannelMixMixin):
     def forward(self, data):
         x = data['inputs']  # B x C x T
         cond = self.get_cond(data)
-        if cond:
+        if cond is not None:
             # reshape to B x C x T x E_c
             cond = cond.reshape(
                 -1, self.args.num_channels, cond.shape[1], cond.shape[2])
@@ -108,6 +108,17 @@ class TransformerQuantized(GPT2Model, WavenetFullChannelMixMixin):
         return outputs
 
 
+class TransformerQuantizedPretrained(TransformerQuantized):
+    '''
+    Same as TransformerQuantized, but uses the pretrained GPT2 model
+    '''
+    @classmethod
+    def from_pretrained(cls, args):
+        return super().from_pretrained('gpt2',
+                                       args,
+                                       config=args.gpt2_config)
+
+
 class TransformerQuantizedConcatEmb(TransformerQuantized):
     def embedding_method(self, x, cond, ch_emb):
         return torch.cat([x, cond, ch_emb], dim=-1)
@@ -126,13 +137,13 @@ class TransformerQuantizedConcatOut(TransformerQuantized):
         shape = (args.num_channels,
                  args.gpt2_config.n_embd * args.num_channels,
                  args.quant_emb)
-        self.head = torch.normal(size=shape,
+        head = torch.normal(size=shape,
                                  dtype=torch.float32,
                                  requires_grad=True,
                                  device='cuda',
                                  mean=0.0,
                                  std=self.config.initializer_range)
-        self.head = Parameter(self.head)
+        self.head = Parameter(head)
 
         self.head2 = Linear(args.quant_emb, self.quant_levels, bias=False)
 

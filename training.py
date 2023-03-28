@@ -80,11 +80,15 @@ class Experiment:
             #self.args.dataset = self.dataset
         else:
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
+            if args.from_pretrained:
+                self.model = args.model.from_pretrained(args)
+            else:
+                self.model = args.model(args)
+
             try:
-                self.model = self.args.model(self.args).cuda()
+                self.model = self.model.cuda()
                 print('Model initialized with cuda.', flush=True)
             except:  # if cuda not available or not cuda model
-                self.model = self.args.model(self.args)
                 print('Model initialized without cuda.')
 
         try:
