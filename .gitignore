@@ -50,7 +50,6 @@ scripts/pnet.c
 notebooks/*.pdf
 
 
-args_test.py
 launch_test.py
 notebooks/MEG-transfer-decoding.code-workspace
 notebooks/tmp/
