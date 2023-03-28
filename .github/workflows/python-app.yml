@@ -34,7 +34,7 @@ jobs:
 
     - name: module tests
       run: |
-        pytest module_tests/*
+        python -m pytest module_tests/*
 
     - name: Get data
       run: |
