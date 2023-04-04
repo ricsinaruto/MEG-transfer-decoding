@@ -10,7 +10,7 @@ from scipy.io import savemat
 
 import os
 
-from wavenets_simple import WavenetSimple
+from wavenets_simple import WavenetSimple, topk_accuracy
 from cichy_data import mulaw_inv
 
 
@@ -205,12 +205,15 @@ class WavenetFull(WavenetSimple):
         self.criterion = CrossEntropyLoss(reduction='none').cuda()
         self.mse_loss = torch.nn.MSELoss().cuda()
 
+    def set_shift(self, shift):
+        for layer in self.layers:
+            layer.shift = shift
+
     def loaded(self, args):
         super().loaded(args)
         self.losses = []
 
-        for layer in self.layers:
-            layer.loaded(shift=args.skips_shift)
+        self.set_shift(args.skips_shift)
 
     def inv_qemb(self, x):
         return self.inv_qemb_l(x)
@@ -327,6 +330,38 @@ class WavenetFull(WavenetSimple):
         return out
 
     def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        if self.args.timesteps == 1:
+            return self.loss_(data, i, sid, train, criterion)
+
+        ts = self.args.timesteps - 1
+        shift = self.args.rf
+        inputs = data['inputs'][:, :, :-ts]
+        cond = data['condition'][:, :, :-ts]
+        targets = data['targets'][:, :, :-ts]
+
+        all_losses = {}
+
+        # loop over future timesteps
+        for i in range(ts + 1):
+            self.set_shift(self.args.skips_shift - ts + i - 1)
+            losses, out = self.loss_(data={'inputs': inputs,
+                                           'condition': cond,
+                                           'targets': targets})
+
+            # add timestep index to each key in losses
+            all_losses.update({k + '_' + str(i): v for k, v in losses.items()})
+
+            # sample next timestep
+            out = self.sample(out.detach())
+
+            # concatenate past timesteps and predictions by the model
+            inputs = torch.cat((inputs[:, :, 1:], out), axis=2)
+            cond = data['condition'][:, :, :-ts+i+1]
+            targets = data['targets'][:, :, :-ts+i+1]
+
+        return all_losses, None, None
+
+    def loss_(self, data, i=0, sid=None, train=True, criterion=None):
         logits = self.forward(data)
 
         # have to make sure this exactly matches the inteded targets
@@ -343,6 +378,9 @@ class WavenetFull(WavenetSimple):
         acc, preds = accuracy(logits, targets)
         acc = torch.mean(acc.float())
 
+        # compute top-5 accuracy
+        top5_acc = topk_accuracy(logits, targets, k=5)
+
         pred_cont = mulaw_inv(preds)
         target_cont = mulaw_inv(targets)
 
@@ -354,6 +392,8 @@ class WavenetFull(WavenetSimple):
                   'valloss/saveloss/none': loss,
                   'valloss/Validation accuracy: ': acc,
                   'trainloss/Train accuracy: ': acc,
+                  'valloss/Validation top-5 accuracy: ': top5_acc,
+                  'trainloss/Train top-5 accuracy: ': top5_acc,
                   'trainloss/Training MSE: ': mse,
                   'valloss/Validation MSE: ': mse}
 
@@ -388,7 +428,133 @@ class WavenetFull(WavenetSimple):
         
 
         #return losses, pred_cont.reshape(shape), target_cont.reshape(shape)
-        return losses, None, None
+        return losses, logits, None
+
+    def sample(self, out):
+        shape = out.shape
+
+        # apply softmax to get probabilities
+        out = F.softmax(out, dim=-1)
+        out = out.reshape(-1, out.shape[-1])
+
+        sampling = self.args.generate_sampling
+        if sampling == 'roulette':
+            out = torch.multinomial(out, 1).reshape(-1)
+        elif sampling == 'argmax':
+            out = torch.argmax(out, dim=-1).reshape(-1)
+        elif sampling == 'top-p':
+            # top-p sampling: sample from the smallest set of tokens whose cumulative probability exceeds args.top_p
+            # select the smallest set of tokens whose cumulative probability exceeds args.top_p
+            sorted_logits, sorted_indices = torch.sort(out, descending=True)
+            cumulative_probs = torch.cumsum(sorted_logits, dim=-1)
+            sorted_indices_to_remove = cumulative_probs > self.args.top_p
+            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+            sorted_indices_to_remove[..., 0] = 0
+            indices_to_remove = sorted_indices_to_remove.scatter(
+                1, sorted_indices, sorted_indices_to_remove)
+            out[indices_to_remove] = 0
+            out = torch.multinomial(out, 1).reshape(-1)
+
+        return out.reshape(shape[:-1])
+
+    def generate(self, train=None):
+        '''
+        Recursively generate with a trained model in various ways.
+        '''
+        self.eval()
+        input_mode = self.args.generate_input
+        mode = self.args.generate_mode
+        sampling = self.args.generate_sampling
+        noise = self.args.generate_noise
+        channels = self.args.num_channels
+        shift = self.args.rf
+        gen_len = self.args.generate_length
+
+        output = torch.zeros((channels, gen_len)).cuda()
+
+        if input_mode == 'gaussian_noise':
+            # input is gaussian noise
+            data = torch.normal(0.0, noise, size=(channels, gen_len)).cuda()
+        elif input_mode == 'none':
+            data = torch.normal(0.0, noise, size=(channels, shift))
+            data = torch.cat((data, torch.zeros((channels, gen_len))), dim=1)
+            data = data.cuda()
+        elif input_mode == 'shuffled_data':
+            # input data is shuffled training data
+            train = train[:, :-3, :].reshape(-1)
+            inds = np.random.shuffle(np.arange(len(train)))
+            data = train[inds].reshape(channels, gen_len)
+        elif input_mode == 'data':
+            data = train[0, :channels, :shift]
+            zeros = torch.zeros((channels, gen_len), dtype=torch.int32).cuda()
+            data = torch.cat((data, zeros), dim=1)
+
+            # create conditioning data with shift+gen_len length
+            '''
+            seconds = int(gen_len/self.args.sr_data)*2
+            epoch_len = int(self.args.sr_data*0.5)
+            cond = []
+            for s in range(seconds):
+                # choose a class randomly from self.args.num_classes
+                cl = np.random.randint(1, self.args.num_classes)
+                cond.append(np.array([cl]*epoch_len))
+
+                # uniform distribution between 0.9 and 1
+                num_zeros = np.random.randint(int(epoch_len*0.8), epoch_len)
+                cond.append(np.zeros((num_zeros)))
+
+            cond = np.concatenate(cond)[:shift+gen_len]
+            # replace first epoch with train cond channel
+            cond = torch.Tensor(cond).cuda().long()
+            cond[:shift] = train[0, -2, :shift]
+            '''
+            cond = train[:, -2, :shift].reshape(-1)[:shift+gen_len]
+            # save cond to result_dir for later
+            np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                    cond.cpu().numpy())
+            cond = cond.unsqueeze(0).unsqueeze(0)
+
+        elif input_mode == 'frequency':
+            # generated data with starting from an input with specific freq
+            data = np.random.normal(0, 0.0, (channels, self.args.sr_data*50))
+            x = np.arange(shift)/self.args.sr_data
+            sine = np.sin(2*np.pi*noise*x)
+            sine = (sine - np.mean(sine))/np.std(sine)
+            data[0, :shift] = sine
+            # data[:, :shift] = self.args.dataset.x_val[:, start:start+shift]
+            data = torch.Tensor(data).cuda()
+        else:
+            raise ValueError('No valid args.generate_input specified.')
+
+        print(data.shape)
+        print(cond.shape)
+
+        # recursively generate using the previously defined input
+        for t in range(shift, data.shape[1]):
+            inputs = data[:, t-shift:t].reshape(1, channels, -1)
+            cond_ex = cond[:, :, t-shift:t]
+            out = self.forward({'inputs': inputs, 'condition': cond_ex})
+
+            out = self.sample(out.detach())
+
+            # switch between IIR, FIR, and purely recursive modes
+            if mode == 'IIR':
+                data[:, t] = data[:, t] + out
+            elif mode == 'FIR':
+                output[:, t] = out
+            elif mode == 'recursive':
+                data[:, t] = out
+            else:
+                raise ValueError('No valid args.generate_mode specified.')
+
+        if mode == 'FIR':
+            data = output
+
+        data = data.cpu().numpy()
+        name = 'generated_' + input_mode + mode + sampling + str(noise) + '.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+        return data
 
     def compute_log_pxy(self, data, tau=1.0):
         '''
@@ -856,124 +1022,6 @@ class WavenetFullChannel(WavenetFullTest):
 
         return out
 
-    def generate(self, train=None):
-        '''
-        Recursively generate with a trained model in various ways.
-        '''
-        self.eval()
-        input_mode = self.args.generate_input
-        mode = self.args.generate_mode
-        sampling = self.args.generate_sampling
-        noise = self.args.generate_noise
-        channels = self.args.num_channels
-        shift = self.args.rf
-        gen_len = self.args.generate_length
-
-        output = torch.zeros((channels, gen_len)).cuda()
-
-        if input_mode == 'gaussian_noise':
-            # input is gaussian noise
-            data = torch.normal(0.0, noise, size=(channels, gen_len)).cuda()
-        elif input_mode == 'none':
-            data = torch.normal(0.0, noise, size=(channels, shift))
-            data = torch.cat((data, torch.zeros((channels, gen_len))), dim=1)
-            data = data.cuda()
-        elif input_mode == 'shuffled_data':
-            # input data is shuffled training data
-            train = train[:, :-3, :].reshape(-1)
-            inds = np.random.shuffle(np.arange(len(train)))
-            data = train[inds].reshape(channels, gen_len)
-        elif input_mode == 'data':
-            data = train[0, :channels, :shift]
-            zeros = torch.zeros((channels, gen_len), dtype=torch.int32).cuda()
-            data = torch.cat((data, zeros), dim=1)
-
-            # create conditioning data with shift+gen_len length
-            '''
-            seconds = int(gen_len/self.args.sr_data)*2
-            epoch_len = int(self.args.sr_data*0.5)
-            cond = []
-            for s in range(seconds):
-                # choose a class randomly from self.args.num_classes
-                cl = np.random.randint(1, self.args.num_classes)
-                cond.append(np.array([cl]*epoch_len))
-
-                # uniform distribution between 0.9 and 1
-                num_zeros = np.random.randint(int(epoch_len*0.8), epoch_len)
-                cond.append(np.zeros((num_zeros)))
-
-            cond = np.concatenate(cond)[:shift+gen_len]
-            # replace first epoch with train cond channel
-            cond = torch.Tensor(cond).cuda().long()
-            cond[:shift] = train[0, -2, :shift]
-            '''
-            cond = train[:, -2, :shift].reshape(-1)[:shift+gen_len]
-            cond = cond.unsqueeze(0).unsqueeze(0)
-
-        elif input_mode == 'frequency':
-            # generated data with starting from an input with specific freq
-            data = np.random.normal(0, 0.0, (channels, self.args.sr_data*50))
-            x = np.arange(shift)/self.args.sr_data
-            sine = np.sin(2*np.pi*noise*x)
-            sine = (sine - np.mean(sine))/np.std(sine)
-            data[0, :shift] = sine
-            # data[:, :shift] = self.args.dataset.x_val[:, start:start+shift]
-            data = torch.Tensor(data).cuda()
-        else:
-            raise ValueError('No valid args.generate_input specified.')
-
-        print(data.shape)
-        print(cond.shape)
-
-        # recursively generate using the previously defined input
-        for t in range(shift, data.shape[1]):
-            inputs = data[:, t-shift:t].reshape(1, channels, -1)
-            cond_ex = cond[:, :, t-shift:t]
-            out = self.forward({'inputs': inputs, 'condition': cond_ex})
-            out = out.detach()
-
-            # apply softmax to get probabilities
-            out = F.softmax(out, dim=-1)
-
-            # get roulette wheel prediction based on output probabilities (last dimension)
-            out = out.reshape(-1, out.shape[-1])
-
-            if sampling == 'roulette':
-                out = torch.multinomial(out, 1).reshape(-1)
-            elif sampling == 'argmax':
-                out = torch.argmax(out, dim=-1).reshape(-1)
-            elif sampling == 'top-p':
-                # top-p sampling: sample from the smallest set of tokens whose cumulative probability exceeds args.top_p
-                # select the smallest set of tokens whose cumulative probability exceeds args.top_p
-                sorted_logits, sorted_indices = torch.sort(out, descending=True)
-                cumulative_probs = torch.cumsum(sorted_logits, dim=-1)
-                sorted_indices_to_remove = cumulative_probs > self.args.top_p
-                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                sorted_indices_to_remove[..., 0] = 0
-                indices_to_remove = sorted_indices_to_remove.scatter(
-                    1, sorted_indices, sorted_indices_to_remove)
-                out[indices_to_remove] = 0
-                out = torch.multinomial(out, 1).reshape(-1)
-
-            # switch between IIR, FIR, and purely recursive modes
-            if mode == 'IIR':
-                data[:, t] = data[:, t] + out
-            elif mode == 'FIR':
-                output[:, t] = out
-            elif mode == 'recursive':
-                data[:, t] = out
-            else:
-                raise ValueError('No valid args.generate_mode specified.')
-
-        if mode == 'FIR':
-            data = output
-
-        data = data.cpu().numpy()
-        name = 'generated_' + input_mode + mode + sampling + str(noise) + '.mat'
-        savemat(os.path.join(self.args.result_dir, name), {'X': data})
-
-        return data
-
 
 class WavenetFullChannelMix(WavenetFullChannel):
     def build_model(self, args):
@@ -985,6 +1033,7 @@ class WavenetFullChannelMix(WavenetFullChannel):
 
     def get_cond(self, data):
         cond = None
+        chn_dim = data['inputs'].shape[1]
         if self.args.cond_channels > 0:
             # cond: B x E x T
             cond_ind = data['condition']
@@ -1001,7 +1050,7 @@ class WavenetFullChannelMix(WavenetFullChannel):
             cond = cond * (cond_ind > 0).float()
 
             # repeat cond across new args.channels dim
-            cond = cond.unsqueeze(1).repeat(1, self.args.num_channels, 1, 1)
+            cond = cond.unsqueeze(1).repeat(1, chn_dim, 1, 1)
             cond = cond.reshape(-1, cond.shape[-2], cond.shape[-1])
 
         # specify type of cond as tensor

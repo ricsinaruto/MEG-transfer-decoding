@@ -993,6 +993,9 @@ class CichyQuantized(MRCData):
         Get batch of data.
         '''
         num_chn = self.args.num_channels
+        model_chn_dim = num_chn
+        if hasattr(self.args, 'model_chn_dim'):
+            model_chn_dim = self.args.model_chn_dim
 
         if i == 0:
             self.inds[split] = np.random.permutation(data.shape[0])
@@ -1012,15 +1015,20 @@ class CichyQuantized(MRCData):
 
         # remove the already sampled indices
         self.inds[split] = self.inds[split][bs:]
-        
-        # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
-        data = {'inputs': data[:, :num_chn, :],
-                'targets': data[:, num_chn:num_chn*2, :],
-                'condition': data[:, -2:-1, :],
-                'sid': data[:, -1:, :]}
+
+        # loop over channel batching
+        batch = []
+        for j in range(int(num_chn/model_chn_dim)):
+            # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
+            d = {'inputs': data[:, j*model_chn_dim:(j+1)*model_chn_dim, :],
+                 'targets': data[:, j*model_chn_dim+num_chn:(j+1)*model_chn_dim+num_chn, :],
+                 'condition': data[:, -2:-1, :],
+                 'sid': data[:, -1:, :],
+                 'ch_ids': np.arange(j*model_chn_dim, (j+1)*model_chn_dim)}
+            batch.append(d)
 
         # return data and subject indices
-        return data, data['sid']
+        return batch, [d['sid'] for d in batch]
 
     def set_common(self, args=None):
         if isinstance(self.args.sample_rate, list):
