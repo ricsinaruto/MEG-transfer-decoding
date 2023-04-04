@@ -343,10 +343,10 @@ class WavenetFull(WavenetSimple):
 
         # loop over future timesteps
         for i in range(ts + 1):
-            self.set_shift(self.args.skips_shift - ts + i - 1)
-            losses, out = self.loss_(data={'inputs': inputs,
-                                           'condition': cond,
-                                           'targets': targets})
+            self.set_shift(self.args.skips_shift - ts + i)
+            losses, out, _ = self.loss_(data={'inputs': inputs,
+                                              'condition': cond,
+                                              'targets': targets})
 
             # add timestep index to each key in losses
             all_losses.update({k + '_' + str(i): v for k, v in losses.items()})
@@ -535,7 +535,7 @@ class WavenetFull(WavenetSimple):
             cond_ex = cond[:, :, t-shift:t]
             out = self.forward({'inputs': inputs, 'condition': cond_ex})
 
-            out = self.sample(out.detach())
+            out = self.sample(out.detach()).reshape(-1)
 
             # switch between IIR, FIR, and purely recursive modes
             if mode == 'IIR':
