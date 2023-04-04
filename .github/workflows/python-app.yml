@@ -33,6 +33,8 @@ jobs:
 
     - name: module tests
       run: |
+        source ~/.condasetup
+        module load Anaconda3
         conda activate job_run
         which python
         python -m pytest module_tests/*
