@@ -138,6 +138,7 @@ class Args:
         self.generate_mode = 'recursive'  # IIR or FIR mode for wavenet generation
         self.generate_input = 'data'  # input type for generation
         self.generate_sampling = 'top-p'
+        self.top_p = 0.8
         self.individual = True  # whether to analyse individual kernels
         self.anal_lr = 0.001  # learning rate for input backpropagation
         self.anal_epochs = 200  # number of epochs for input backpropagation

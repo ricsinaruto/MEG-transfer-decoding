@@ -1298,7 +1298,7 @@ class Experiment:
                                             window='hamming',
                                             nperseg=ts_hw*2,
                                             noverlap=ts_hw*2-1,
-                                            boundary='')
+                                            boundary=None)
         val_fft = val_fft.copy()
         shuffled_val_fft = val_fft.copy()
 
@@ -1330,7 +1330,7 @@ class Experiment:
                                         window='hamming',
                                         nperseg=ts_hw*2,
                                         noverlap=ts_hw*2-1,
-                                        boundary=False)
+                                        boundary=None)
                     self.dataset.x_val_t[:, :chn, :] = torch.Tensor(X)
 
                     loss = val_func(self.dataset.x_val_t)
