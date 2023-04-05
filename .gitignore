@@ -61,6 +61,7 @@ scripts/results/
 scripts/terminal.sh
 scripts/well/
 transformer/
+module_tests/outputs/
 wavenets_classifier.py
 
 .vscode/

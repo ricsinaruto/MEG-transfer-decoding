@@ -2,9 +2,12 @@ import os
 import torch
 import torch.nn.functional as F
 import numpy as np
-from transformers import GPT2Config
 
-from transformers_quantized import TransformerQuantizedPretrained
+from classifiers_linear import LDA
+from classifiers_simpleNN import SimpleClassFakeLoss, SimpleClassAutoregcheck
+from wavenets_simple import WavenetSimple, ConvAR
+from wavenets_full import WavenetFull, WavenetFullChannelMix, WavenetFullTest, WavenetFullGauss, WavenetFullTestSemb
+from classifiers_wavenet import WavenetClassifier, WavenetContClass
 from cichy_data import CichyData, CichyContData, CichyQuantized, CichyQuantizedGauss, CichyQuantizedAR
 
 
@@ -23,13 +26,25 @@ class Args:
         self.learning_rate = 0.0001  # learning rate for Adam
         self.max_trials = 1.0  # ratio of training data (1=max)
         self.val_max_trials = False
-        self.batch_size = 2  # batch size for training and validation data
-        self.epochs = 1000  # number of loops over training data
+        self.batch_size = 1  # batch size for training and validation data
+        self.epochs = 0  # number of loops over training data
         self.val_freq = 10  # how often to validate (in epochs)
         self.print_freq = 2  # how often to print metrics (in epochs)
         self.anneal_lr = False  # whether to anneal learning rate
         self.save_curves = True  # whether to save loss curves to file
-        self.load_model = False
+        self.load_model = [os.path.join(
+            '/',
+            'well',
+            'woolrich',
+            'users',
+            'yaq921',
+            'MEG-transfer-decoding',  # path(s) to save model and others
+            'results',
+            'cichy_epoched',
+            'subj1',
+            'cont_quantized',
+            'wavenetfullchannelmix_50hz100hz',
+            'model.pt')]
         self.result_dir = [os.path.join(
             '/',
             'well',
@@ -41,9 +56,8 @@ class Args:
             'cichy_epoched',
             'subj1',
             'cont_quantized',
-            'gpt2_50hz100hz',
-            'from_pretrained')]
-        self.model = TransformerQuantizedPretrained  # class of model to use
+            'wavenetfullchannelmix_50hz100hz')]
+        self.model = WavenetFullChannelMix  # class of model to use
         self.dataset = CichyQuantized  # dataset class for loading and handling data
 
         # wavenet arguments
@@ -54,9 +68,9 @@ class Args:
         self.ch_mult = 2  # channel multiplier for hidden channels in wavenet
         self.groups = 306
         self.kernel_size = 2  # convolutional kernel size
-        self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 256]  # start and end of timesteps within trials
-        self.rf = 128  # receptive field of wavenet, 2*rf - 1
+        self.timesteps = 5  # how many timesteps in the future to forecast
+        self.sample_rate = [0, 510]  # start and end of timesteps within trials
+        self.rf = 255  # receptive field of wavenet, 2*rf - 1
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
@@ -65,7 +79,7 @@ class Args:
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
-        self.wavenet_class = None  # class of wavenet model
+        self.wavenet_class = WavenetSimple  # class of wavenet model
         self.load_conv = False  # where to load neural nerwork
         # dimensionality reduction from
         self.pred = False  # whether to use wavenet in prediction mode
@@ -79,31 +93,15 @@ class Args:
         self.stft_freq = 0  # STFT frequency index for LDA_wavelet_freq model
         self.decode_peak = 0.1
 
-        # GPT2 arguments
-        n_embd = 768
-        self.from_pretrained = True
-        self.gpt2_config = GPT2Config(
-            vocab_size=50257,
-            n_positions=1024,
-            n_embd=n_embd,
-            n_layer=12,
-            n_head=12,
-            resid_pdrop=0.1,
-            embd_pdrop=0.1,
-            attn_pdrop=0.1,
-            use_cache=False
-        )
-
         # quantized wavenet arguments
-        self.skips_shift = 1
+        self.skips_shift = 256
         self.mu = 255
         self.residual_channels = 128
         self.dilation_channels = 128
         self.skip_channels = 512
-        self.channel_emb = n_embd
-        self.class_emb = n_embd
-        self.quant_emb = n_embd
-        self.pos_emb = n_embd
+        self.channel_emb = 30
+        self.class_emb = 10
+        self.quant_emb = 64
         self.cond_channels = self.class_emb + self.embedding_dim
         self.head_channels = 256
         self.conv_bias = False

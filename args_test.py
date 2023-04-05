@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from transformers import GPT2Config
 
-from transformers_quantized import TransformerQuantizedPretrained
+from transformers_quantized import TransformerQuantized
 from cichy_data import CichyData, CichyContData, CichyQuantized, CichyQuantizedGauss, CichyQuantizedAR
 
 
@@ -43,7 +43,7 @@ class Args:
             'cont_quantized',
             'gpt2_50hz100hz',
             'concat_output')]
-        self.model = TransformerQuantizedPretrained  # class of model to use
+        self.model = TransformerQuantized  # class of model to use
         self.dataset = CichyQuantized  # dataset class for loading and handling data
 
         # wavenet arguments

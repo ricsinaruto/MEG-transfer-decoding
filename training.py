@@ -5,12 +5,11 @@ import sails
 import torch
 import random
 import pickle
-import traceback
 from copy import deepcopy
 
 from scipy import signal
 from scipy.io import savemat
-from scipy.fft import fft, ifft, rfft, irfft
+from scipy.fft import rfft, irfft
 
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
@@ -70,29 +69,33 @@ class Experiment:
                 self.model = torch.load(self.model_path)
                 self.model.loaded(args)
                 self.model.cuda()
-            except:
+            except (AttributeError, RuntimeError):
                 self.model = pickle.load(open(self.model_path, 'rb'))
                 self.model.loaded(args)
 
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
 
             print('Model loaded from file.', flush=True)
-            #self.args.dataset = self.dataset
         else:
             self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-            self.model = args.model(args)
+
+            if args.from_pretrained:
+                self.model = args.model.from_pretrained(args)
+            else:
+                self.model = args.model(args)
 
             try:
                 self.model = self.model.cuda()
                 print('Model initialized with cuda.', flush=True)
-            except:  # if cuda not available or not cuda model
+            # if cuda not available or not cuda model
+            except (AttributeError, RuntimeError):  
                 print('Model initialized without cuda.')
 
         try:
             # calculate number of total parameters in model
             parameters = [param.numel() for param in self.model.parameters()]
             print('Number of parameters: ', sum(parameters), flush=True)
-        except:
+        except AttributeError:
             print('Can\'t calculate number of parameters.', flush=True)
 
     def train(self):
@@ -106,6 +109,7 @@ class Experiment:
                          weight_decay=self.args.alpha_norm)
 
         # use cosine annealing
+        scheduler = None
         if self.args.anneal_lr:
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=self.dataset.train_batches)
@@ -134,16 +138,23 @@ class Experiment:
                 except AttributeError:
                     pass
 
-                losses, _, _, = self.model.loss(batch, i, sid, train=True)
+                # if batch is list, then it's a list of batches
+                if not isinstance(batch, list):
+                    batch = [batch]
+                    sid = [sid]
 
-                # optimize model according to the optimization loss
-                optkey = [key for key in losses if 'optloss' in key]
-                losses[optkey[0]].backward()
-                optimizer.step()
-                optimizer.zero_grad()
-                losses = self.loss.append(losses)
+                for subbatch, subsid in zip(batch, sid):
+                    losses, _, _, = self.model.loss(
+                        subbatch, i, subsid, train=True)
 
-                if self.args.anneal_lr:
+                    # optimize model according to the optimization loss
+                    optkey = [key for key in losses if 'optloss' in key]
+                    losses[optkey[0]].backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    losses = self.loss.append(losses)
+
+                if scheduler is not None:
                     scheduler.step()
 
             # print training losses
@@ -193,8 +204,14 @@ class Experiment:
         # loop over test batches
         for i in range(self.dataset.test_batches):
             batch, sid = self.dataset.get_test_batch(i)
-            loss, output, target = self.model.loss(batch, i, sid, train=False)
-            self.loss.append(loss)
+            if not isinstance(batch, list):
+                batch = [batch]
+                sid = [sid]
+
+            for subbatch, subsid in zip(batch, sid):
+                loss, output, target = self.model.loss(
+                    subbatch, i, subsid, train=False)
+                self.loss.append(loss)
 
         losses = self.loss.print('valloss')
 
@@ -227,27 +244,20 @@ class Experiment:
         '''
         self.loss.dict = {}
         self.model.eval()
-        outputs = []
-        targets = []
 
         # loop over validation batches
         for i in range(self.dataset.val_batches):
             batch, sid = self.dataset.get_val_batch(i)
-            loss, output, target = self.model.loss(batch, i, sid, train=False)
-            self.loss.append(loss)
+            if not isinstance(batch, list):
+                batch = [batch]
+                sid = [sid]
 
-            #outputs.append(output)
-            #targets.append(target)
-
-        # concatenate self.model.losses
-        #loss = torch.concat((self.model.losses), dim=0).numpy()
-
-        # save self.model.losses to file
-        #path = os.path.join(self.args.result_dir, 'losses.npy')
-        #np.save(path, loss)
+            for subbatch, subsid in zip(batch, sid):
+                loss, output, target = self.model.loss(
+                    subbatch, i, subsid, train=False)
+                self.loss.append(loss)
 
         losses = self.loss.print('valloss')
-        #return losses, torch.cat(outputs), torch.cat(targets)
         return losses, None, None
 
     def classify(self):
@@ -260,7 +270,7 @@ class Experiment:
         batch = {'inputs': [], 'targets': [], 'condition': [], 'sid': []}
         # loop over validation batches
         for i in range(0, batches['sid'].shape[0], self.args.batch_size):
-            
+
             for k in batch.keys():
                 batch[k] = batches[k][i:i+self.args.batch_size]
 
@@ -284,17 +294,13 @@ class Experiment:
             loss, output, target = self.model.loss(batch, i, sid, train=False)
             self.loss.append(loss)
 
-        losses = self.loss.print('valloss')
+        self.loss.print('valloss')
 
     def save_validation(self):
         '''
         Save validation loss to file.
         '''
         loss, output, target = self.evaluate()
-
-        # print variance if needed
-        #if output is not None and target is not None:
-        #    print(torch.std((output-target).flatten()))
 
         path = os.path.join(self.args.result_dir, 'val_loss.txt')
         with open(path, 'w') as f:
@@ -319,7 +325,6 @@ class Experiment:
                 batch, i, sid, train=False, criterion=mse)
 
             loss = [loss_dict[k] for k in loss_dict if 'valcriterion' in k]
-            #loss = torch.mean(loss, (1, 2)).detach()
             loss = loss[0].detach()
             losses.append((sid, loss))
 
@@ -361,6 +366,8 @@ class Experiment:
         '''
         _, outputs, targets = self.evaluate()
 
+        if outputs is None or targets is None:
+            return
         outputs = outputs.detach().cpu().numpy()
         targets = targets.detach().cpu().numpy()
 
@@ -410,7 +417,7 @@ class Experiment:
         Needs an update to work.
         '''
         self.model.eval()
-        self.loss.list = []
+        self.loss.dict = {}
         mse = MSELoss().cuda()
 
         self.args.num_channels = list(range(128))
@@ -425,7 +432,7 @@ class Experiment:
             loss, output, target, loss2 = self.model.loss(
                 batch_pca, i, _, train=False)
 
-            self.loss.append(loss, loss2)
+            self.loss.append(loss)
 
             outputs.append(output.detach())
             targets.append(batch[:, :, -output.shape[2]:])
@@ -443,7 +450,11 @@ class Experiment:
         loss = mse(outputs, targets)
         print(loss.item())
 
-    def lda_baseline(self, filewrite=True, run_test=True, save_model=True, reinit=True):
+    def lda_baseline(self,
+                     filewrite=True,
+                     run_test=True,
+                     save_model=True,
+                     reinit=True):
         '''
         Train a separate linear model across time windows.
         '''
@@ -559,11 +570,15 @@ class Experiment:
         accs = np.zeros((self.args.subjects, self.args.subjects))
         for i in range(self.args.subjects):
             # select i-th subject
-            self.dataset.x_train_t = x_train[self.dataset.sub_id['train'] == i].clone()
-            self.dataset.x_val_t = x_train[self.dataset.sub_id['train'] == i].clone()
+            ids = self.dataset.sub_id['train'] == i
+            self.dataset.x_train_t = x_train[ids].clone()
+            self.dataset.x_val_t = x_train[ids].clone()
 
             # train model
-            self.lda_baseline(filewrite=False, run_test=False, save_model=False, reinit=False)
+            self.lda_baseline(filewrite=False,
+                              run_test=False,
+                              save_model=False, 
+                              reinit=False)
 
             # evaluate model on all other subjects
             for j in range(self.args.subjects):
@@ -625,9 +640,7 @@ class Experiment:
 
                 # select trials from these 2 classes
                 inds = (c1_inds) | (c2_inds)
-                #print(x_t[:100, chn, 0])
                 self.dataset.x_train_t = self.dataset.x_train_t[inds, :, :]
-                #print(self.dataset.x_train_t.shape)
 
                 # repeat for validation data
                 c1_inds = x_v[:, chn, 0] == c1
@@ -686,13 +699,15 @@ class Experiment:
         with open(path, 'w') as f:
             x_train = self.dataset.x_train_t
 
-            acc, _, _ = self.model.eval(x_train, sid=self.dataset.sub_id['train'])
+            acc, _, _ = self.model.eval(
+                x_train, sid=self.dataset.sub_id['train'])
             print(acc)
             f.write(str(acc) + '\n')
 
     def lda_eval_train_ensemble(self):
         '''
-        Run an ensemble of individual classifiers on the train data of another dataset.
+        Run ensemble of individual classifiers on the
+        train data of another dataset.
         '''
 
         # load models
@@ -708,6 +723,7 @@ class Experiment:
             x_train = self.dataset.x_train_t
             
             class_probs = []
+            y_val = None
             for model in models:
                 class_prob, y_val = model.predict(x_train)
                 class_prob = np.argmax(class_prob, axis=1)
@@ -749,6 +765,7 @@ class Experiment:
         '''
         # TODO: this is individual filters but we might also be interested in
         # looking at the sum of filters for a specific output channel
+        raise NotImplementedError
         sr = self.args.sr_data
         filters = params.reshape(params.shape[0], -1).transpose()
         num_filt = min(filters.shape[0], self.args.kernel_limit)
@@ -891,6 +908,7 @@ class Experiment:
         '''
         Evaluate a trained model for recursive multi-step prediction.
         '''
+        raise NotImplementedError
         self.model.eval()
         self.model.timesteps = 1
         ts = self.args.timesteps
@@ -931,48 +949,6 @@ class Experiment:
             # self.freq_loss(generated, target)
 
         file.close()
-
-    def feature_importance(self):
-        '''
-        Evaluate how important is each timestep to prediction.
-        Only used for forecasting models, not classification.
-        '''
-        self.model.eval()
-        rf = self.args.rf
-        bs = self.args.batch_size
-        chs = list(range(self.args.num_channels))
-
-        x_val = self.dataset.x_val
-        x_val = torch.Tensor(x_val).float().cuda()
-
-        losses = []
-        # loop over timestep positions in input
-        for i in list(range(1, rf))[::-1]:
-            losses.append([])
-            # loop over timesteps
-            for b in range(int((x_val.shape[1]-rf)/bs)-1):
-                inputs = [x_val[:, b*bs+k:b*bs+k+rf+1] for k in range(bs)]
-                inputs = torch.stack(inputs)
-
-                # permute the i-th timestep
-                random.shuffle(chs)
-                inputs = (inputs[:, :, :i],
-                          inputs[:, chs, i:i+1],
-                          inputs[:, :, i+1:])
-
-                inputs = torch.cat(inputs, dim=2)
-
-                loss = self.model.loss(inputs, b, train=False)[0]
-                losses[-1].append(loss.item())
-
-            losses[-1] = sum(losses[-1])/len(losses[-1])
-            print(losses[-1])
-
-        # save to file loss for each permuted timestep
-        path = os.path.join(self.args.result_dir, 'permutation_losses.txt')
-        with open(path, 'w') as f:
-            for loss in losses:
-                f.write(str(loss) + '\n')
 
     def PFIemb(self):
         '''
@@ -1071,7 +1047,8 @@ class Experiment:
         perm_list = []
         for p in range(self.args.PFI_perms):
             # first permute channels across all timesteps
-            idx = np.random.rand(*val_t[:, :chn, 0].T.shape).argsort(0)
+            shape = val_t[:, :chn, 0].T.shape
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             for i in range(times):
                 a = shuffled_val_t[:, :chn, i].T
                 out = a[idx, np.arange(a.shape[1])].T
@@ -1117,17 +1094,17 @@ class Experiment:
 
         # compute fft
         val_fft = rfft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
-        shuffled_val_fft = val_fft.copy()
-        #samples = [val_fft[0, 0, :].copy()]
+        shuffled_val_fft = val_fft.copy()  # type: ignore
 
         # original loss without shuffling
         og_loss = val_func(self.dataset.x_val_t, True)
 
         perm_list = []
         for p in range(self.args.PFI_perms):
-            id_arr = np.arange(val_fft.shape[0])
+            id_arr = np.arange(val_fft.shape[0])  # type: ignore
             # shuffle frequency components across channels
-            idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
+            shape = val_fft[:, :, 0].T.shape  # type: ignore
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             for i in range(times//2+1):
                 a = shuffled_val_fft[:, :, i].T
                 out = a[idx, id_arr].T
@@ -1136,12 +1113,12 @@ class Experiment:
             loss_list = [og_loss]
             # slide over epoch and always permute frequencies within a window
             for i in range(hw, times//2-hw):
-                dataset_val_fft = val_fft.copy()
+                dataset_val_fft = val_fft.copy()  # type: ignore
                 win = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
                 dataset_val_fft[:, :, i-hw:i+hw+1] = win
-                #dataset_val_fft[:, :, i-hw:i+hw+1] = 0 + 0j
+                # dataset_val_fft[:, :, i-hw:i+hw+1] = 0 + 0j
 
-                #samples.append(dataset_val_fft[0, 0, :].copy())
+                # samples.append(dataset_val_fft[0, 0, :].copy())
 
                 # inverse fourier transform
                 data = torch.Tensor(irfft(dataset_val_fft))
@@ -1157,7 +1134,7 @@ class Experiment:
                             'val_loss_PFIfreqs' + str(hw*2) + '.npy')
         np.save(path, np.array(perm_list))
 
-        #np.save(path + '_samples', np.array(samples))
+        # np.save(path + '_samples', np.array(samples))
 
     def PFIfreq_ch(self):
         '''
@@ -1184,14 +1161,15 @@ class Experiment:
 
         # compute fft
         val_fft = rfft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
-        shuffled_val_fft = val_fft.copy()
+        shuffled_val_fft = val_fft.copy()  # type: ignore
 
-        samples = [val_fft[0, 0, :].copy()]
+        samples = [val_fft[0, 0, :].copy()]  # type: ignore
 
         perm_list = []
         for p in range(self.args.PFI_perms):
             # shuffle frequency components across channels
-            idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
+            shape = val_fft[:, :, 0].T.shape  # type: ignore
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             for i in range(times//2+1):
                 a = shuffled_val_fft[:, :, i].T
                 out = a[idx, np.arange(a.shape[1])].T
@@ -1207,10 +1185,10 @@ class Experiment:
                     a = np.array(closest_k[c]) * 3
                     chn_idx = np.append(np.append(a, a+1), a+2)
 
-                    dataset_val_fft = val_fft.copy()
+                    dataset_val_fft = val_fft.copy()  # type: ignore
                     win1 = shuffled_val_fft[:, chn_idx, i-hw:i+hw+1].copy()
                     dataset_val_fft[:, chn_idx, i-hw:i+hw+1] = win1
-                    #samples.append(dataset_val_fft[0, 0, :].copy())
+                    # samples.append(dataset_val_fft[0, 0, :].copy())
 
                     # inverse fourier transform
                     data = torch.Tensor(irfft(dataset_val_fft))
@@ -1253,12 +1231,13 @@ class Experiment:
 
         # compute fft
         val_fft = rfft(self.dataset.x_val_t[:, :chn, :].cpu().numpy())
-        shuffled_val_fft = val_fft.copy()
+        shuffled_val_fft = val_fft.copy()  # type: ignore
 
         perm_list = []
         for p in range(self.args.PFI_perms):
             # shuffle frequency components across channels
-            idx = np.random.rand(*val_fft[:, :, 0].T.shape).argsort(0)
+            shape = val_fft[:, :, 0].T.shape  # type: ignore
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             for i in range(times//2+1):
                 a = shuffled_val_fft[:, :, i].T
                 out = a[idx, np.arange(a.shape[1])].T
@@ -1267,7 +1246,7 @@ class Experiment:
             windows = []
             # slide over epoch and always permute frequencies within a window
             for i in range(hw, times//2-hw):
-                dataset_val_fft = val_fft.copy()
+                dataset_val_fft = val_fft.copy()  # type: ignore
                 win1 = shuffled_val_fft[:, :, i-hw:i+hw+1].copy()
                 dataset_val_fft[:, :, i-hw:i+hw+1] = win1
 
@@ -1326,7 +1305,8 @@ class Experiment:
         perm_list = []
         for p in range(self.args.PFI_perms):
             id_arr = np.arange(val_fft.shape[0])
-            idx = np.random.rand(*val_fft[:, :, 0, 0].T.shape).argsort(0)
+            shape = val_fft[:, :, 0, 0].T.shape
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             for f in range(len(freqs)):
                 for t in range(0, len(times), self.args.PFI_step):
                     a = shuffled_val_fft[:, :, f, t].T
@@ -1406,7 +1386,8 @@ class Experiment:
         perm_list = []
         for p in range(self.args.PFI_perms):
             # first permute timesteps across all channels
-            idx = np.random.rand(*val_t[:, 0, :].T.shape).argsort(0)
+            shape = val_t[:, 0, :].T.shape
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             for i in range(chn):
                 a = shuffled_val_t[:, i, :].T
                 out = a[idx, np.arange(a.shape[1])].T
@@ -1435,7 +1416,7 @@ class Experiment:
 
                     # shuffle closest k channels
                     if self.args.PFI_inverse:
-                        mask = np.ones(chn+1, np.bool)
+                        mask = np.ones(chn+1, np.bool_)
                         mask[chn_idx] = 0
                         mask[chn] = 0
                         window = shuffled_val_t[:, mask, tmin:tmax].clone()
@@ -1471,6 +1452,7 @@ class Experiment:
         generated: generated timeseries for validation data
         target: ground truth validation data
         '''
+        raise NotImplementedError
         length = self.dataset.x_val.shape[1]
         for i, freq in enumerate(self.args.freqs):
             part = self.dataset.stc[self.shift+self.ts:length]
@@ -1622,13 +1604,12 @@ class Experiment:
 
         x_val = self.dataset.x_val_t[:, :-1, :2*self.args.halfwin-1]
         x_val = x_val.permute(0, 2, 1).cpu().numpy()
-        ts = x_val.shape[1]
 
         # get data covariance
-        #x_val = x_val.reshape(-1, x_val.shape[2]) - self.model.pca.mean_
-        #x_val = x_val.reshape(-1, ts, x_val.shape[1])
+        # x_val = x_val.reshape(-1, x_val.shape[2]) - self.model.pca.mean_
+        # x_val = x_val.reshape(-1, ts, x_val.shape[1])
         x_val = x_val.reshape(x_val.shape[0], -1)
-        x_val_cov = np.cov(x_val.T)
+        # x_val_cov = np.cov(x_val.T)
 
         x_train = x_train.reshape(x_train.shape[0], -1)
         x_train_cov = np.cov(x_train.T)
@@ -1643,10 +1624,10 @@ class Experiment:
         '''
 
         # pca into matrix form
-        #pca_w = self.model.pca.components_.T
-        #pca_w = diag_block_mat([pca_w] * ts)
+        # pca_w = self.model.pca.components_.T
+        # pca_w = diag_block_mat([pca_w] * ts)
 
-        #print(self.model.model.intercept_)
+        # print(self.model.model.intercept_)
 
         weights = self.model.model.coef_.T
         # transform conv_weights from 306x80 to 306*50 x 80*50
@@ -1663,20 +1644,18 @@ class Experiment:
         '''
 
         # get latent factors covariance
-        w = (0, 2*self.args.halfwin)
-        #data, target, outputs = self.model.get_output(self.dataset.x_val_t, w)
+        # w = (0, 2*self.args.halfwin)
+        # data, target, outputs = \
+        # self.model.get_output(self.dataset.x_val_t, w)
 
         # compare outputs
-        #outputs2 = np.einsum('bm, mc, ck -> bk',
+        # outputs2 = np.einsum('bm, mc, ck -> bk',
         #                     x_val[:, :], pca_w, weights)
         outputs2 = x_train @ weights
         output_cov = np.linalg.inv(np.cov(outputs2.T))
 
-        #print(outputs[0, :100])
-        #print(outputs2[0, :100])
-
         print(x_train_cov.shape)
-        #print(pca_w.shape)
+        # print(pca_w.shape)
         print(weights.shape)
         print(output_cov.shape)
 
@@ -1741,6 +1720,10 @@ def main(Args):
     for i, d_path in enumerate(args.data_path):
         args_pass = Args()
 
+        # check if args contains the from_pretrained flag
+        if not hasattr(args_pass, 'from_pretrained'):
+            args_pass.from_pretrained = False
+
         args_pass.data_path = d_path
         args_pass.result_dir = checklist(args.result_dir, i)
         args_pass.dump_data = checklist(args.dump_data, i)
@@ -1779,6 +1762,7 @@ def main(Args):
             num_loops = len(args.max_trials)
 
         # if only using one dataset across loops, initialze it once
+        args_data = None
         if args.common_dataset and dataset is None:
             dataset = args_pass.dataset(args_pass)
             args_data = deepcopy(args_pass)
@@ -1821,7 +1805,7 @@ def main(Args):
                 args_new.result_dir = os.path.join(args_pass.result_dir, name)
 
             # set common dataset if given
-            if args.common_dataset:
+            if args_data is not None:
                 args_data.load_model = args.load_model[i]
                 args_data.result_dir = args.result_dir[i]
                 e = Experiment(args_data, dataset)
@@ -1854,8 +1838,6 @@ def main(Args):
                 e.kernel_network_FIR()
             if Args.func.get('kernel_network_IIR'):
                 e.kernel_network_IIR()
-            if Args.func.get('feature_importance'):
-                e.feature_importance()
             if Args.func.get('save_validation_subs'):
                 e.save_validation_subs()
             if Args.func.get('save_validation_ch'):

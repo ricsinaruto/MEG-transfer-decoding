@@ -18,6 +18,19 @@ from scipy.io import savemat
 from cichy_data import mulaw_inv
 
 
+def topk_accuracy(pred, targets, k=5):
+    """Computes the acuracy@k for the specified values of k"""
+    batch_size = targets.size(0)
+
+    if pred.shape[-1] != k:
+        _, pred = pred.topk(k, -1, True, True)
+    pred = pred.t()
+    correct = pred.eq(targets.view(1, -1).expand_as(pred))
+
+    correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+    return correct_k.mul_(1.0 / batch_size)
+
+
 class WavenetSimple(Module):
     '''
     Implements a simplified version of wavenet without padding.
@@ -559,7 +572,7 @@ class WavenetSimple(Module):
 
         all_kernels = []
         for i, layer in enumerate(self.cnn_layers):
-            kernels = layer.weight.detach().cpu().numpy()
+            kernels = torch.tensor(layer.weight).detach().cpu().numpy()
             kernels = kernels[chid*ch:(chid+1)*ch, :, :]
             all_kernels.append(kernels)
             kernels = kernels.reshape(-1, ks)
@@ -575,7 +588,7 @@ class WavenetSimple(Module):
 
                 # create filter from dilated kernel
                 filter_coeff = []
-                spacing = layer.dilation[0]-1
+                spacing = layer.dilation[0]-1  # type: ignore
                 for j in range(ks):
                     filter_coeff.append(kernels[k, -j])
                     filter_coeff.extend([0] * spacing)
@@ -611,7 +624,7 @@ class WavenetSimple(Module):
         '''
         sr = self.args.sr_data
         filter_coeff = np.append(-1, filter_coeff)
-        return signal.freqz(b=1, a=filter_coeff, fs=sr, worN=5*sr)
+        return signal.freqz(b=1, a=filter_coeff, fs=sr, worN=5*sr)  # type: ignore
 
     def multiplied_kernels(self, all_kernels):
         pass
@@ -756,8 +769,6 @@ class ConvAR(WavenetSimple):
         x = maxabs.transform(x.T).T
         x = np.clip(x, -1, 1)
 
-        shape = x.shape
-
         x = x.reshape(-1)
         x = np.sign(x)*np.log(1+mu*np.abs(x))/np.log(1+mu)
 
@@ -775,10 +786,43 @@ class ConvAR(WavenetSimple):
 
         acc_shifted = (targets_1 == targets_2).sum() / targets_1.shape[0]
 
-        return mse_shifted, acc_shifted
+        # compute top-k accuracy
+        top5_acc = self.topk_accuracy(targets_2, targets_1, k=5)
+
+        return mse_shifted, acc_shifted, top5_acc
 
     def generate_forward(self, inputs, channels):
         return self.conv(inputs).detach().reshape(channels)
+
+    def topk_accuracy(self, preds, targets, k=5):
+        '''
+        Compute top-k accuracy. preds contains 1 prediction,
+        so for top5 we take the nearest 5 neighbors.
+        '''
+        # stack 2 lower and 2 higher predictions
+        all_preds = [preds]
+        for i in range(k//2):
+            all_preds.append(preds+i+1)
+
+            # for any prediction that is below 0 or above 255,
+            # need to select values in the other direction
+            inds = all_preds[-1] > self.args.mu
+            over = all_preds[-1][inds] - self.args.mu
+            all_preds[-1][inds] = preds[inds] - k//2 - over
+
+            # print(all_preds[-1][inds])
+
+            all_preds.append(preds-i-1)
+
+            inds = all_preds[-1] < 0
+            under = -all_preds[-1][inds]
+            all_preds[-1][inds] = preds[inds] + k//2 + under
+            # print(all_preds[-1][inds])
+
+        all_preds = torch.stack(all_preds, dim=1)
+
+        # call topk on all predictions
+        return topk_accuracy(all_preds, targets, k)
 
     def loss(self, data, i=0, sid=None, train=True, criterion=None):
         preds = self.conv(data['inputs'])
@@ -821,6 +865,8 @@ class ConvAR(WavenetSimple):
             targets256 = torch.Tensor(targets256).cuda()
             targets32 = torch.Tensor(targets32).cuda()
 
+            top5_acc = self.topk_accuracy(preds256, targets256, 5)
+
             preds8 = torch.Tensor(preds8).cuda()
             targets8 = torch.Tensor(targets8).cuda()
 
@@ -836,18 +882,21 @@ class ConvAR(WavenetSimple):
             losses['valloss/Validation MSE 8q: '] = mse8
             losses['trainloss/Training MSE 256q: '] = mse256
             losses['valloss/Validation MSE 256q: '] = mse256
+            losses['trainloss/Training top-5 accuracy 256q: '] = top5_acc
+            losses['valloss/Validation top-5 accuracy 256q: '] = top5_acc
 
             # compute the mse256 of repeating shifting timestep
-            mse_shifted, acc_shifted = self.repeat_metrics(
+            mse_shifted, acc_shifted, top5 = self.repeat_metrics(
                 targets256, chn, trials, ts)
             losses['valloss/repeat_mse256: '] = mse_shifted
             losses['valloss/repeat_acc256: '] = acc_shifted
+            losses['valloss/repeat_top5_acc256: '] = top5
 
-            mse_shifted, acc_shifted = self.repeat_metrics(
+            mse_shifted, acc_shifted, top5 = self.repeat_metrics(
                 targets8, chn, trials, ts)
             losses['valloss/repeat_acc8: '] = acc_shifted
 
-            mse_shifted, acc_shifted = self.repeat_metrics(
+            mse_shifted, acc_shifted, top5 = self.repeat_metrics(
                 targets32, chn, trials, ts)
             losses['valloss/repeat_acc32: '] = acc_shifted
 
@@ -892,7 +941,7 @@ class WavenetSimpleUniToMulti(WavenetSimple):
         '''
         Reset univariate portions of the weights to the original univariates.
         '''
-        with torch.torch.no_grad():
+        with torch.no_grad():
             self.unitomulti(self.first_conv, self.fconv)
             self.unitomulti(self.last_conv, self.lconv)
             for new_layer, old_layer in zip(self.cnn_layers, self.layers):
@@ -905,13 +954,14 @@ class WavenetSimpleUniToMulti(WavenetSimple):
         gin = int(old.in_channels/old.groups)
         gout = int(old.out_channels/old.groups)
         for i in range(old.groups):
-            new.weight[i*gout:(i+1)*gout, i*gin:(i+1)*gin, :] = old.weight[i*gout:(i+1)*gout, :, :]
+            new.weight[i*gout:(i+1)*gout, i*gin:(i+1)*gin, :] = \
+                old.weight[i*gout:(i+1)*gout, :, :]
 
     def loss_(self, x, i=0, sid=None, train=True, criterion=None):
         # reset weights on each iteration
         self.reset_weights()
 
-        return super(WavenetSimpleUniToMulti, self).loss(x, i, sid, train, criterion)
+        return super().loss(x, i, sid, train, criterion)
 
 
 class WavenetSimpleShared(WavenetSimple):
@@ -1097,8 +1147,9 @@ class WavenetSimpleSembConcat(WavenetSimple):
         sid = self.subject_emb(sid).permute(0, 2, 1)
 
         # shuffle embeddings in a window if needed
-        if self.emb_window:
-            idx = np.random.rand(*sid[:, :, 0].T.shape).argsort(0)
+        if isinstance(self.emb_window, tuple):
+            shape = sid[:, :, 0].T.shape
+            idx = np.random.rand(*shape).argsort(0)  # type: ignore
             a = sid[:, :, 0].T.clone()
             out = a[idx, np.arange(a.shape[1])].T
 
@@ -1122,7 +1173,7 @@ class WavenetSimpleSembConcat(WavenetSimple):
             torch.LongTensor([0]).cuda()
 
         # shuffle embedding values if needed
-        if self.shuffle_embeddings:
+        if self.shuffle_embeddings and sid is not None:
             print('This code needs to be checked!')
             subid = int(sid[0].detach().cpu().numpy())
             indices = torch.randperm(self.subject_emb.weight.shape[1])
@@ -1266,8 +1317,9 @@ class WavenetSimpleSembAdd(WavenetSimple):
     '''
     def forward(self, x, sid=None):
         # add subject embeddings to input timeseries
-        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
-        sid = self.subject_emb(sid).permute(0, 2, 1)
+        if sid is not None:
+            sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+            sid = self.subject_emb(sid).permute(0, 2, 1)
         x = x + sid
 
         return super(WavenetSimpleSembAdd, self).forward(x)
@@ -1279,8 +1331,9 @@ class WavenetSimpleSembMult(WavenetSimple):
     '''
     def forward(self, x, sid=None):
         # multiply subject embedding with input
-        sid = sid.repeat(x.shape[2], 1).permute(1, 0)
-        sid = self.subject_emb(sid).permute(0, 2, 1)
+        if sid is not None:
+            sid = sid.repeat(x.shape[2], 1).permute(1, 0)
+            sid = self.subject_emb(sid).permute(0, 2, 1)
         x = x * sid
 
         return super(WavenetSimpleSembMult, self).forward(x)
@@ -1318,7 +1371,7 @@ class WavenetMultistep(WavenetSimple):
             # this loop should be parallelized
             for t in range(1, self.timesteps):
                 # dilation rate adapted to padded input
-                d = self.cnn_layers[i].dilation[0]
+                d = self.cnn_layers[i].dilation[0]  # type: ignore
                 start = t - d
                 if d > t:
                     d = t + (d - t) * (t + 1)
@@ -1331,12 +1384,12 @@ class WavenetMultistep(WavenetSimple):
                         indices.append(index)
 
                 out = F.conv1d(x[:, :, indices],
-                               weight=self.cnn_layers[i].weight,
-                               bias=self.cnn_layers[i].bias,
+                               weight=torch.tensor(self.cnn_layers[i].weight),
+                               bias=torch.tensor(self.cnn_layers[i].bias),
                                stride=t+1,
                                padding=self.cnn_layers[i].padding,
-                               dilation=d,
-                               groups=self.cnn_layers[i].groups)
+                               dilation=torch.tensor(d),
+                               groups=torch.tensor(self.cnn_layers[i].groups))
 
                 # truncate to correct shape by removing early elements
                 out = out[:, :, -x_t1.shape[2]:]

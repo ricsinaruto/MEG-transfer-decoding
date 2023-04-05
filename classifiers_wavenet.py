@@ -1,4 +1,3 @@
-from cv2 import COVAR_SCALE
 import numpy as np
 import os
 import torch
