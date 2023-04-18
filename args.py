@@ -2,13 +2,10 @@ import os
 import torch
 import torch.nn.functional as F
 import numpy as np
+from transformers import ReformerConfig
 
-from classifiers_linear import LDA
-from classifiers_simpleNN import SimpleClassFakeLoss, SimpleClassAutoregcheck
-from wavenets_simple import WavenetSimple, ConvAR
-from wavenets_full import WavenetFull, WavenetFullChannelMix, WavenetFullTest, WavenetFullGauss, WavenetFullTestSemb
-from classifiers_wavenet import WavenetClassifier, WavenetContClass
-from cichy_data import CichyData, CichyContData, CichyQuantized, CichyQuantizedGauss, CichyQuantizedAR
+from transformers_quantized import TransformerQuantizedFlat
+from cichy_data import CichyData, CichyContData, CichyQuantized
 
 
 class Args:
@@ -26,25 +23,13 @@ class Args:
         self.learning_rate = 0.0001  # learning rate for Adam
         self.max_trials = 1.0  # ratio of training data (1=max)
         self.val_max_trials = False
-        self.batch_size = 1  # batch size for training and validation data
-        self.epochs = 0  # number of loops over training data
-        self.val_freq = 10  # how often to validate (in epochs)
-        self.print_freq = 2  # how often to print metrics (in epochs)
+        self.batch_size = 2  # batch size for training and validation data
+        self.epochs = 1000  # number of loops over training data
+        self.val_freq = 2  # how often to validate (in epochs)
+        self.print_freq = 1  # how often to print metrics (in epochs)
         self.anneal_lr = False  # whether to anneal learning rate
         self.save_curves = True  # whether to save loss curves to file
-        self.load_model = [os.path.join(
-            '/',
-            'well',
-            'woolrich',
-            'users',
-            'yaq921',
-            'MEG-transfer-decoding',  # path(s) to save model and others
-            'results',
-            'cichy_epoched',
-            'subj1',
-            'cont_quantized',
-            'wavenetfullchannelmix_50hz100hz',
-            'model.pt')]
+        self.load_model = False
         self.result_dir = [os.path.join(
             '/',
             'well',
@@ -56,8 +41,8 @@ class Args:
             'cichy_epoched',
             'subj1',
             'cont_quantized',
-            'wavenetfullchannelmix_50hz100hz')]
-        self.model = WavenetFullChannelMix  # class of model to use
+            'reformer')]
+        self.model = TransformerQuantizedFlat  # class of model to use
         self.dataset = CichyQuantized  # dataset class for loading and handling data
 
         # wavenet arguments
@@ -68,9 +53,9 @@ class Args:
         self.ch_mult = 2  # channel multiplier for hidden channels in wavenet
         self.groups = 306
         self.kernel_size = 2  # convolutional kernel size
-        self.timesteps = 5  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 510]  # start and end of timesteps within trials
-        self.rf = 255  # receptive field of wavenet, 2*rf - 1
+        self.timesteps = 1  # how many timesteps in the future to forecast
+        self.sample_rate = [0, 128]  # start and end of timesteps within trials
+        self.rf = 64  # receptive field of wavenet, 2*rf - 1
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
@@ -79,7 +64,7 @@ class Args:
         #self.dilations = [1] + [2] + [4] * 7  # costum dilations
 
         # classifier arguments
-        self.wavenet_class = WavenetSimple  # class of wavenet model
+        self.wavenet_class = None  # class of wavenet model
         self.load_conv = False  # where to load neural nerwork
         # dimensionality reduction from
         self.pred = False  # whether to use wavenet in prediction mode
@@ -93,15 +78,39 @@ class Args:
         self.stft_freq = 0  # STFT frequency index for LDA_wavelet_freq model
         self.decode_peak = 0.1
 
+        # GPT2 arguments
+        n_embd = 12*8
+        self.gpt2_config = ReformerConfig(
+            attention_head_size=64,
+            attn_layers=['local', 'lsh', 'local', 'lsh', 'local', 'lsh'],
+            axial_pos_embds=True,
+            axial_pos_shape=[307, 128],
+            axial_pos_embds_dim=[64, n_embd-64],
+            feed_forward_size=512,
+            hidden_dropout_prob=0.05,
+            hidden_size=n_embd,
+            is_decoder=True,
+            local_attn_chunk_length=128,
+            local_num_chunks_before=1,
+            local_attention_probs_dropout_prob=0.05,
+            lsh_attn_chunk_length=128,
+            lsh_num_chunks_before=1,
+            max_position_embeddings=78592,
+            num_attention_heads=2,
+            vocab_size=257
+        )
+
         # quantized wavenet arguments
-        self.skips_shift = 256
+        self.skips_shift = 1
         self.mu = 255
         self.residual_channels = 128
         self.dilation_channels = 128
         self.skip_channels = 512
-        self.channel_emb = 30
-        self.class_emb = 10
-        self.quant_emb = 64
+        self.channel_emb = n_embd
+        self.ts_emb = n_embd
+        self.class_emb = n_embd
+        self.quant_emb = n_embd
+        self.pos_emb = n_embd
         self.cond_channels = self.class_emb + self.embedding_dim
         self.head_channels = 256
         self.conv_bias = False
@@ -134,7 +143,7 @@ class Args:
         self.halfwin = 5  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
-        self.generate_length = self.sr_data * 1000  # generated timeseries len
+        self.generate_length = self.sr_data * 3600  # generated timeseries len
         self.generate_mode = 'recursive'  # IIR or FIR mode for wavenet generation
         self.generate_input = 'data'  # input type for generation
         self.generate_sampling = 'top-p'

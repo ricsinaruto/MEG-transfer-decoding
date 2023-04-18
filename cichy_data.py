@@ -988,7 +988,7 @@ class CichyQuantized(MRCData):
 
         return x
 
-    def get_batch(self, i, data, split):
+    def _get_batch(self, i, data, split):
         '''
         Get batch of data.
         '''
@@ -1028,7 +1028,11 @@ class CichyQuantized(MRCData):
             batch.append(d)
 
         # return data and subject indices
-        return batch, [d['sid'] for d in batch]
+        return batch, [d['sid'] for d in batch], inds
+    
+    def get_batch(self, i, data, split='train'):
+        batch, sid, inds =  self._get_batch(i, data, split)
+        return batch, sid
 
     def set_common(self, args=None):
         if isinstance(self.args.sample_rate, list):
@@ -1127,6 +1131,49 @@ class CichyQuantized(MRCData):
 
         path = os.path.join(self.args.dump_data, 'maxabs_scaler')
         pickle.dump(self.maxabs, open(path, 'wb'))
+
+
+class CichyQuantizedRandomCond(CichyQuantized):
+    def __init__(self, args):
+        super().__init__(args)
+
+        cond_path = os.path.join(args.data_dir, 'cond_labels.npy')
+        # try loading condition labels from disk
+        if os.path.exists(cond_path):
+            self.cond_labels = np.load(cond_path)
+            self.cond_labels = torch.Tensor(self.cond_labels).cuda().long()
+            return
+
+        # create fake condition labels
+        data_length = self.x_train_t.shape[2]//2 * self.x_train_t.shape[0]
+        seconds = data_length//self.args.sr_data
+        epoch_len = self.args.sr_data//2
+        cond = []
+        for s in range(seconds):
+            # choose a class randomly from self.args.num_classes
+            cl = np.random.randint(1, self.args.num_classes)
+            cond.append(np.array([cl]*epoch_len))
+
+            # uniform distribution between 0.9 and 1
+            num_zeros = np.random.randint(int(epoch_len*0.8), epoch_len)
+            cond.append(np.zeros((num_zeros)))
+
+        cond = np.concatenate(cond)[:shift+gen_len]
+        # replace first epoch with train cond channel
+        cond = torch.Tensor(cond).cuda().long()
+        cond[:shift] = train[0, -2, :shift]
+
+    def get_batch(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
+        batch, sid, inds = super()._get_batch(i, data, split)
+
+        # replace cond field of batch with self.cond_labels
+        for i in len(batch):
+            batch[i]['condition'] = self.cond_labels[inds]
+
+        return batch, sid
 
 
 class CichyQuantizedSimulation(CichyQuantized):

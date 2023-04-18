@@ -433,6 +433,11 @@ class WavenetFull(WavenetSimple):
     def sample(self, out):
         shape = out.shape
 
+        # apply temperature
+        # check if args.temperature exists
+        if hasattr(self.args, 'temperature'):
+            out = out / self.args.temperature
+
         # apply softmax to get probabilities
         out = F.softmax(out, dim=-1)
         out = out.reshape(-1, out.shape[-1])
@@ -489,27 +494,37 @@ class WavenetFull(WavenetSimple):
             zeros = torch.zeros((channels, gen_len), dtype=torch.int32).cuda()
             data = torch.cat((data, zeros), dim=1)
 
+            # select half of label timeseries from each batch
+            cond = train[:, -2, :train.shape[2]//2].reshape(-1)[:shift+gen_len]
+            # save cond to result_dir for later
+            np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                    cond.cpu().numpy())
+            cond = cond.unsqueeze(0).unsqueeze(0)
+
+        elif input_mode == 'random_cond':
+            data = train[0, :channels, :shift]
+            zeros = torch.zeros((channels, gen_len), dtype=torch.int32).cuda()
+            data = torch.cat((data, zeros), dim=1)
+
             # create conditioning data with shift+gen_len length
-            '''
-            seconds = int(gen_len/self.args.sr_data)*2
-            epoch_len = int(self.args.sr_data*0.5)
-            cond = []
-            for s in range(seconds):
+            seconds = gen_len//self.args.sr_data
+            sr = self.args.sr_data
+            cond = [np.zeros((shift))]
+            for s in range(seconds*2):
+                # uniform distribution between 0.2 and 0.8
+                num_zeros = np.random.randint(int(sr*0.2), int(sr*0.8))
+                cond.append(np.zeros((num_zeros)))
+
                 # choose a class randomly from self.args.num_classes
                 cl = np.random.randint(1, self.args.num_classes)
-                cond.append(np.array([cl]*epoch_len))
 
-                # uniform distribution between 0.9 and 1
-                num_zeros = np.random.randint(int(epoch_len*0.8), epoch_len)
-                cond.append(np.zeros((num_zeros)))
+                epoch_len = np.random.randint(int(sr*0.2), int(sr*0.8))
+                cond.append(np.array([cl]*epoch_len))
 
             cond = np.concatenate(cond)[:shift+gen_len]
             # replace first epoch with train cond channel
             cond = torch.Tensor(cond).cuda().long()
-            cond[:shift] = train[0, -2, :shift]
-            '''
-            cond = train[:, -2, :shift].reshape(-1)[:shift+gen_len]
-            # save cond to result_dir for later
+
             np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
                     cond.cpu().numpy())
             cond = cond.unsqueeze(0).unsqueeze(0)
@@ -529,11 +544,27 @@ class WavenetFull(WavenetSimple):
         print(data.shape)
         print(cond.shape)
 
+        past_key_values = None
         # recursively generate using the previously defined input
         for t in range(shift, data.shape[1]):
             inputs = data[:, t-shift:t].reshape(1, channels, -1)
             cond_ex = cond[:, :, t-shift:t]
-            out = self.forward({'inputs': inputs, 'condition': cond_ex})
+            if past_key_values is not None:
+                # only need to keep the last timestep of inputs
+                inputs = inputs[:, :, -1:]
+                cond_ex = cond_ex[:, :, -1:]
+
+            out = self.forward({'inputs': inputs,
+                                'condition': cond_ex,
+                                'past_key_values': past_key_values})
+
+            # check if out is a tuple
+            if isinstance(out, tuple):
+                out, past_key_values = out
+                past_key_values = tuple(
+                    (key[:, :, 1:].detach(), value[:, :, 1:].detach())
+                    for (key, value) in past_key_values
+                )
 
             out = self.sample(out.detach()).reshape(-1)
 
@@ -546,6 +577,10 @@ class WavenetFull(WavenetSimple):
                 data[:, t] = out
             else:
                 raise ValueError('No valid args.generate_mode specified.')
+
+            # print progress in percent
+            if t % 100 == 0:
+                print('Progress: {:.2f}%'.format(t/data.shape[1]*100), flush=True)
 
         if mode == 'FIR':
             data = output
