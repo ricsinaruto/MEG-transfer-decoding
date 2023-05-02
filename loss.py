@@ -16,7 +16,7 @@ class Loss:
 
         return x
 
-    def print(self, split, exception='saveloss'):
+    def print(self, split, exception='saveloss', gpu_id=0):
         msg = ''
         for k, v in self.dict.items():
             self.dict[k] = sum(v)/len(v)
@@ -24,7 +24,8 @@ class Loss:
             if split in k and exception not in k:
                 msg += k.split('/')[-1] + ': ' + str(self.dict[k]) + '\t'
 
-        print(msg, flush=True)
+        if gpu_id == 0:
+            print(msg, flush=True)
 
         losses = dict([(k, self.dict[k]) for k in self.dict if split in k])
         self.dict = {}
