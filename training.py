@@ -301,8 +301,13 @@ class Experiment:
                 self.loss.append(loss)
 
         losses = self.loss.print('valloss', gpu_id=self.gpu_id)
+
+        # if gpu_id is 0 don't append it to file
         path = os.path.join(self.args.result_dir,
                             f'{split}_loss{self.gpu_id}.txt')
+        if self.gpu_id == 0:
+            path = os.path.join(self.args.result_dir, f'{split}_loss.txt')
+
         with open(path, 'w') as f:
             f.write(str(losses))
 
@@ -334,6 +339,8 @@ class Experiment:
 
             path = os.path.join(self.args.result_dir,
                                 f'losses{self.gpu_id}.svg')
+            if self.gpu_id == 0:
+                path = os.path.join(self.args.result_dir, 'losses.svg')
             plt.savefig(path, format='svg', dpi=1200)
             plt.close('all')
 

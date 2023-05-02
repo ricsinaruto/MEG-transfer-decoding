@@ -3,9 +3,11 @@ launch_q2.py
 launch_q3.py
 launch_ddp_q.py
 launch_ddp_q2.py
+launch_ddp_q4.py
 args_q.py
 args_q2.py
 args_q3.py
+args_q4.py
 btc_data.py
 scripts/donders_data/*
 scripts/simulated_data/*
