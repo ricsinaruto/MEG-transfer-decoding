@@ -389,7 +389,7 @@ class WavenetFull(WavenetSimple):
         all_losses.update({k + '_' + str(0): v for k, v in losses.items()})
 
         # sample next timestep
-        out_og = self.sample(out_og.detach())
+        out_og = sample(self.args, out_og)
 
         # loop over future timesteps
         for shift in range(self.args.example_shift):
@@ -410,7 +410,7 @@ class WavenetFull(WavenetSimple):
                 all_losses.update({k + '_' + str(i): v for k, v in losses.items()})
 
                 # sample next timestep
-                out = self.sample(out.detach())
+                out = sample(self.args, out)
 
         return all_losses, None, None
 
@@ -597,7 +597,7 @@ class WavenetFull(WavenetSimple):
                     for (key, value) in past_key_values
                 )
 
-            out = self.sample(out.detach()).reshape(-1)
+            out = sample(self.args, out).reshape(-1)
 
             # switch between IIR, FIR, and purely recursive modes
             if mode == 'IIR':
