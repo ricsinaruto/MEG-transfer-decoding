@@ -1423,6 +1423,9 @@ class CichyQuantizedRandomCond(CichyQuantized):
             num_zeros = np.random.randint(int(epoch_len*0.8), epoch_len)
             cond.append(np.zeros((num_zeros)))
 
+        shift = None
+        gen_len = None
+        train = None
         cond = np.concatenate(cond)[:shift+gen_len]
         # replace first epoch with train cond channel
         cond = torch.Tensor(cond).cuda().long()

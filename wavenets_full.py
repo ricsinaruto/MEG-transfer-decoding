@@ -473,6 +473,8 @@ class WavenetFull(WavenetSimple):
         target_cont = target_cont.reshape(shape)
         all_loss = all_loss.reshape(shape)
 
+        targets = None
+        losses = None
         targets = targets.reshape(shape)
         acc = torch.eq(targets[:, :, 1:], targets[:, :, :-1])
         losses['valloss/repeat acc: '] = torch.mean(acc.float())
@@ -487,6 +489,7 @@ class WavenetFull(WavenetSimple):
         np.save(path, all_loss)
 
         # save data['sid']
+        data = None
         path = os.path.join(self.args.result_dir, train + f'sid{i}.npy')
         np.save(path, data['sid'].cpu().numpy())
 
