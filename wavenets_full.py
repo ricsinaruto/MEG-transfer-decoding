@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
+from transformers import ReformerConfig
 
 # import savemat
 from scipy.io import savemat
@@ -21,6 +22,46 @@ def accuracy(out_class, y):
     classes = torch.argmax(out_class, dim=-1)
     accuracy = torch.eq(classes, y)
     return accuracy, classes
+
+
+def sample(args, logits):
+    shape = logits.shape
+    logits = logits.detach()
+
+    # apply temperature, check first if args.temperature exists
+    if hasattr(args, 'temperature'):
+        logits = logits / args.temperature
+
+    # apply softmax to get probabilities
+    out = F.softmax(logits, dim=-1)
+    out = out.reshape(-1, out.shape[-1])
+
+    sampling = args.generate_sampling
+    if sampling == 'roulette':
+        out = torch.multinomial(out, 1).reshape(-1)
+    elif sampling == 'argmax':
+        out = torch.argmax(out, dim=-1).reshape(-1)
+    elif sampling == 'top-p':
+        # top-p sampling: sample from the smallest set of tokens whose
+        # cumulative probability exceeds args.top_p
+        # select the smallest set of tokens whose cumulative probability
+        # exceeds args.top_p
+        sorted_logits, sorted_indices = torch.sort(out, descending=True)
+        cumulative_probs = torch.cumsum(sorted_logits, dim=-1)
+        sorted_inds_to_remove = cumulative_probs > args.top_p
+
+        # shift the indices to the right to keep also the first token above
+        sorted_inds_to_remove[..., 1:] = \
+            sorted_inds_to_remove[..., :-1].clone()
+        sorted_inds_to_remove[..., 0] = 0
+        indices_to_remove = sorted_inds_to_remove.scatter(
+            1, sorted_indices, sorted_inds_to_remove)
+
+        # zero out the indices to remove
+        out[indices_to_remove] = 0
+        out = torch.multinomial(out, 1).reshape(-1)
+
+    return out.reshape(shape[:-1])
 
 
 def wave_init_weights(m):
@@ -334,46 +375,59 @@ class WavenetFull(WavenetSimple):
             return self.loss_(data, i, sid, train, criterion)
 
         ts = self.args.timesteps - 1
-        shift = self.args.rf
         inputs = data['inputs'][:, :, :-ts]
         cond = data['condition'][:, :, :-ts]
         targets = data['targets'][:, :, :-ts]
 
         all_losses = {}
 
+        losses, out_og, past_kv_og = self.loss_(data={'inputs': inputs,
+                                                      'condition': cond,
+                                                      'targets': targets})
+
+        # add timestep index to each key in losses
+        all_losses.update({k + '_' + str(0): v for k, v in losses.items()})
+
+        # sample next timestep
+        out_og = self.sample(out_og.detach())
+
         # loop over future timesteps
-        for i in range(ts + 1):
-            self.set_shift(self.args.skips_shift - ts + i)
-            losses, out, _ = self.loss_(data={'inputs': inputs,
-                                              'condition': cond,
-                                              'targets': targets})
+        for shift in range(self.args.example_shift):
+            out = out_og[:, :, shift:shift+1]
+            past_kv = past_kv_og[:-self.args.example_shift + shift + 1]
+            for i in range(1, ts + 1):
+                # concatenate past timesteps and predictions by the model
+                cond = data['condition'][:, :, :past_kv.shape[2]+1]
+                targets = data['targets'][:, :, :past_kv.shape[2]+1]
 
-            # add timestep index to each key in losses
-            all_losses.update({k + '_' + str(i): v for k, v in losses.items()})
+                losses, out, past_kv = self.loss_(
+                    data={'inputs': out,
+                          'condition': cond,
+                          'targets': targets,
+                          'past_key_values': past_kv})
 
-            # sample next timestep
-            out = self.sample(out.detach())
+                # add timestep index to each key in losses
+                all_losses.update({k + '_' + str(i): v for k, v in losses.items()})
 
-            # concatenate past timesteps and predictions by the model
-            inputs = torch.cat((inputs[:, :, 1:], out), axis=2)
-            cond = data['condition'][:, :, :-ts+i+1]
-            targets = data['targets'][:, :, :-ts+i+1]
+                # sample next timestep
+                out = self.sample(out.detach())
 
         return all_losses, None, None
 
     def loss_(self, data, i=0, sid=None, train=True, criterion=None):
         logits = self.forward(data)
+        past_kv = None
+        if isinstance(logits, tuple):
+            logits, past_kv = logits
 
-        # have to make sure this exactly matches the inteded targets
-        targets = data['targets']
-        targets = targets[:, :, -logits.shape[-2]:]
+        targets = data['targets'][:, :, -logits.shape[-2]:]
 
         shape = targets.shape
-        targets = targets.reshape(-1)
+        targets = targets.reshape(-1).long()
         logits = logits.reshape(-1, logits.shape[-1])
 
-        all_loss = self.criterion(logits, targets)
-        loss = torch.mean(all_loss)
+        ce_loss = self.criterion(logits, targets)
+        loss = torch.mean(ce_loss)
 
         acc, preds = accuracy(logits, targets)
         acc = torch.mean(acc.float())
@@ -381,86 +435,60 @@ class WavenetFull(WavenetSimple):
         # compute top-5 accuracy
         top5_acc = topk_accuracy(logits, targets, k=5)
 
-        pred_cont = mulaw_inv(preds)
-        target_cont = mulaw_inv(targets)
-
-        # compute MSE
-        mse = self.mse_loss(pred_cont, target_cont)
-
         losses = {'trainloss/optloss/Training loss: ': loss,
                   'valloss/valcriterion/Validation loss: ': loss,
                   'valloss/saveloss/none': loss,
                   'valloss/Validation accuracy: ': acc,
                   'trainloss/Train accuracy: ': acc,
                   'valloss/Validation top-5 accuracy: ': top5_acc,
-                  'trainloss/Train top-5 accuracy: ': top5_acc,
-                  'trainloss/Training MSE: ': mse,
-                  'valloss/Validation MSE: ': mse}
+                  'trainloss/Train top-5 accuracy: ': top5_acc}
+
+        if self.args.gpt2_config.vocab_size < 500:
+            losses, pred, target = self.compute_mse(preds, targets, losses)
 
         if self.save_preds and False:
-            
+            self.save_outputs(pred, target, ce_loss, shape, train=train, i=i)
 
-            pred_cont = pred_cont.detach().cpu().numpy()
-            target_cont = target_cont.detach().cpu().numpy()
-            all_loss = all_loss.detach().cpu().numpy()
+        return losses, logits, past_kv
 
-            pred_cont = pred_cont.reshape(shape)
-            target_cont = target_cont.reshape(shape)
-            all_loss = all_loss.reshape(shape)
+    def compute_mse(self, preds, targets, losses):
+        pred_cont = mulaw_inv(preds)
+        target_cont = mulaw_inv(targets)
 
-            targets = targets.reshape(shape)
-            acc = torch.eq(targets[:, :, 1:], targets[:, :, :-1])
-            losses['valloss/repeat acc: '] = torch.mean(acc.float())
+        # compute MSE
+        mse = self.mse_loss(pred_cont, target_cont)
+        mse = torch.mean(mse)
 
-            train = 'train' if train else 'val'
-            # save predictions and targets
-            path = os.path.join(self.args.result_dir, train + f'preds{i}.npy')
-            np.save(path, pred_cont)
-            path = os.path.join(self.args.result_dir, train + f'targets{i}.npy')
-            np.save(path, target_cont)
-            path = os.path.join(self.args.result_dir, train + f'losses{i}.npy')
-            np.save(path, all_loss)
+        losses['trainloss/Training MSE: '] = mse
+        losses['valloss/Validation MSE: '] = mse
 
-            # save data['sid']
-            path = os.path.join(self.args.result_dir, train + f'sid{i}.npy')
-            np.save(path, data['sid'].cpu().numpy())
+        return losses, pred_cont, target_cont
 
-        
+    def save_outputs(self, pred_cont, target_cont, all_loss, shape, train=True, i=0):
+        pred_cont = pred_cont.detach().cpu().numpy()
+        target_cont = target_cont.detach().cpu().numpy()
+        all_loss = all_loss.detach().cpu().numpy()
 
-        #return losses, pred_cont.reshape(shape), target_cont.reshape(shape)
-        return losses, logits, None
+        pred_cont = pred_cont.reshape(shape)
+        target_cont = target_cont.reshape(shape)
+        all_loss = all_loss.reshape(shape)
 
-    def sample(self, out):
-        shape = out.shape
+        targets = targets.reshape(shape)
+        acc = torch.eq(targets[:, :, 1:], targets[:, :, :-1])
+        losses['valloss/repeat acc: '] = torch.mean(acc.float())
 
-        # apply temperature
-        # check if args.temperature exists
-        if hasattr(self.args, 'temperature'):
-            out = out / self.args.temperature
+        train = 'train' if train else 'val'
+        # save predictions and targets
+        path = os.path.join(self.args.result_dir, train + f'preds{i}.npy')
+        np.save(path, pred_cont)
+        path = os.path.join(self.args.result_dir, train + f'targets{i}.npy')
+        np.save(path, target_cont)
+        path = os.path.join(self.args.result_dir, train + f'losses{i}.npy')
+        np.save(path, all_loss)
 
-        # apply softmax to get probabilities
-        out = F.softmax(out, dim=-1)
-        out = out.reshape(-1, out.shape[-1])
-
-        sampling = self.args.generate_sampling
-        if sampling == 'roulette':
-            out = torch.multinomial(out, 1).reshape(-1)
-        elif sampling == 'argmax':
-            out = torch.argmax(out, dim=-1).reshape(-1)
-        elif sampling == 'top-p':
-            # top-p sampling: sample from the smallest set of tokens whose cumulative probability exceeds args.top_p
-            # select the smallest set of tokens whose cumulative probability exceeds args.top_p
-            sorted_logits, sorted_indices = torch.sort(out, descending=True)
-            cumulative_probs = torch.cumsum(sorted_logits, dim=-1)
-            sorted_indices_to_remove = cumulative_probs > self.args.top_p
-            sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-            sorted_indices_to_remove[..., 0] = 0
-            indices_to_remove = sorted_indices_to_remove.scatter(
-                1, sorted_indices, sorted_indices_to_remove)
-            out[indices_to_remove] = 0
-            out = torch.multinomial(out, 1).reshape(-1)
-
-        return out.reshape(shape[:-1])
+        # save data['sid']
+        path = os.path.join(self.args.result_dir, train + f'sid{i}.npy')
+        np.save(path, data['sid'].cpu().numpy())
 
     def generate(self, train=None):
         '''

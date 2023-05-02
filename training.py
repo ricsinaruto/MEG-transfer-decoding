@@ -14,7 +14,8 @@ from scipy.fft import rfft, irfft
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
 
-from torch.nn import MSELoss
+from torch.nn import MSELoss, DataParallel
+from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Adam
 
 from loss import Loss
@@ -22,7 +23,7 @@ from classifiers_linear import LDA, LDA_average_trials
 
 
 class Experiment:
-    def __init__(self, args, dataset=None):
+    def __init__(self, args, dataset=None, gpu_id=None):
         '''
         Initialize model and dataset using an Args object.
         '''
@@ -30,194 +31,291 @@ class Experiment:
         self.loss = Loss()
         self.val_losses = []
         self.train_losses = []
+        self.initialize_amp()
+        self.set_device_and_gpu(gpu_id)
+        self.fix_random_seed()
+        self.create_result_directory()
+        self.save_args_object()
+        self.initialize_dataset(dataset)
+        self.initialize_model()
+        self.print_model_parameters()
+        self.use_data_parallel(gpu_id)
+        print(f'Experiment initialized on GPU {self.gpu_id}', flush=True)
 
-        if args.fix_seed:
+    def initialize_amp(self):
+        if not hasattr(self.args, 'amp'):
+            self.args.amp = False
+        elif self.args.amp:
+            print('Using automatic mixed precision.', flush=True)
+
+    def set_device_and_gpu(self, gpu_id):
+        self.gpu_id = 0 if gpu_id is None else gpu_id
+        self.args.gpu_id = self.gpu_id
+
+        self.args.num_gpus = 1
+        self.device = torch.device('cuda')
+        if gpu_id is not None:
+            self.args.num_gpus = torch.cuda.device_count()
+            self.device = torch.device(f'cuda:{gpu_id}')
+
+            if gpu_id == 0:
+                print(f'Number of GPUs: {self.args.num_gpus}', flush=True)
+        self.args.device = self.device
+
+    def fix_random_seed(self):
+        if self.args.fix_seed:
             torch.manual_seed(42)
             np.random.seed(42)
             random.seed(42)
 
-        # create folder for results
+    def create_result_directory(self):
         if os.path.isdir(self.args.result_dir):
             print('Result directory already exists, writing to it.',
                   flush=True)
-            print(self.args.result_dir, flush=True)
         else:
-            os.makedirs(self.args.result_dir)
+            os.makedirs(self.args.result_dir, exist_ok=True)
             print('New result directory created.', flush=True)
-            print(self.args.result_dir, flush=True)
+        print(self.args.result_dir, flush=True)
 
-        # save args object
+    def save_args_object(self):
         path = os.path.join(self.args.result_dir, 'args_saved.py')
-        os.system('cp ' + args.name + ' ' + path)
+        os.system(f'cp {self.args.name} {path}')
 
-        # initialize dataset
+    def initialize_dataset(self, dataset):
         if dataset is not None:
             self.dataset = dataset
-        elif args.load_dataset:
-            self.dataset = args.dataset(args)
+        elif self.args.load_dataset:
+            self.dataset = self.args.dataset(self.args)
             print('Dataset initialized.', flush=True)
-
-        # load model if path is specified
-        if args.load_model:
-            if 'model' in args.load_model:
-                self.model_path = args.load_model
-            else:
-                self.model_path = os.path.join(args.load_model, 'model.pt')
-
-            # LDA vs deep learning models
-            try:
-                self.model = torch.load(self.model_path)
-                self.model.loaded(args)
-                self.model.cuda()
-            except (AttributeError, RuntimeError):
-                self.model = pickle.load(open(self.model_path, 'rb'))
-                self.model.loaded(args)
-
-            self.model_path = os.path.join(self.args.result_dir, 'model.pt')
-
-            print('Model loaded from file.', flush=True)
+    
+    def initialize_model(self):
+        if self.args.load_model:
+            self.load_model()
         else:
-            self.model_path = os.path.join(self.args.result_dir, 'model.pt')
+            self.create_model()
 
-            if args.from_pretrained:
-                self.model = args.model.from_pretrained(args)
-            else:
-                self.model = args.model(args)
-
-            try:
-                self.model = self.model.cuda()
-                print('Model initialized with cuda.', flush=True)
-            # if cuda not available or not cuda model
-            except (AttributeError, RuntimeError):  
-                print('Model initialized without cuda.')
+    def load_model(self):
+        if 'model' in self.args.load_model:
+            self.model_path = self.args.load_model
+        else:
+            self.model_path = os.path.join(self.args.load_model, 'model.pt')
 
         try:
-            # calculate number of total parameters in model
+            self.model = torch.load(self.model_path)
+            self.model.loaded(self.args)
+            self.model.to(self.device)
+        except (AttributeError, RuntimeError):
+            self.model = pickle.load(open(self.model_path, 'rb'))
+            self.model.loaded(self.args)
+
+        self.model_path = os.path.join(self.args.result_dir, 'model.pt')
+        print('Model loaded from file.', flush=True)
+
+    def create_model(self):
+        self.model_path = os.path.join(self.args.result_dir, 'model.pt')
+
+        if self.args.from_pretrained:
+            self.model = self.args.model.from_pretrained(self.args)
+        else:
+            self.model = self.args.model(self.args)
+
+        try:
+            self.model = self.model.to(self.device)
+            print('Model initialized with cuda.', flush=True)
+        except (AttributeError, RuntimeError):
+            print('Model initialized without cuda.')
+
+    def print_model_parameters(self):
+        try:
             parameters = [param.numel() for param in self.model.parameters()]
             print('Number of parameters: ', sum(parameters), flush=True)
         except AttributeError:
-            print('Can\'t calculate number of parameters.', flush=True)
+            print("Can't calculate number of parameters.", flush=True)
+
+    def use_data_parallel(self, gpu_id):
+        if gpu_id is not None:
+            self.ddp = DistributedDataParallel(self.model, device_ids=[gpu_id])
+            self.model = self.ddp.module
+
+    def initialize_optimizer(self, model):
+        params = filter(lambda p: p.requires_grad, model.parameters())
+        optimizer = Adam(params,
+                         lr=self.args.learning_rate,
+                         weight_decay=self.args.alpha_norm)
+        return optimizer
+
+    def initialize_scheduler(self, optimizer):
+        scheduler = None
+        if self.args.anneal_lr:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=self.dataset.train_batches)
+        return scheduler
+
+    def process_batch(self, batch, sid, bid, optimizer, scaler):
+        if not isinstance(batch, list):
+            batch = [batch]
+            sid = [sid]
+
+        for subbatch, subsid in zip(batch, sid):
+            if self.args.amp:
+                with torch.autocast(device_type='cuda',
+                                    dtype=torch.float16):
+                    losses, _, _ = self.model.loss(
+                        subbatch, bid, subsid, train=True)
+
+                # find the optimization loss
+                optkey = [key for key in losses if 'optloss' in key]
+                scaler.scale(optkey[0]).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                losses, _, _ = self.model.loss(
+                    subbatch, bid, subsid, train=True)
+                optkey = [key for key in losses if 'optloss' in key]
+                losses[optkey[0]].backward()
+                optimizer.step()
+
+            optimizer.zero_grad(set_to_none=True)
+            losses = self.loss.append(losses)
+
+    def train_epoch(self, model, optimizer, scaler, scheduler):
+        model.train()
+        self.loss.dict = {}
+        for i in range(self.dataset.train_batches):
+            batch, sid = self.dataset.get_train_batch(i)
+            if self.is_empty_batch(batch) or batch is None:
+                break
+
+            self.process_batch(batch, sid, i, optimizer, scaler)
+
+            if scheduler is not None:
+                scheduler.step()
+
+    def save_initial_model(self):
+        path = os.path.join(self.args.result_dir, 'model_init.pt')
+        torch.save(self.model, path, pickle_protocol=4)
+        print('Model saved to result directory.', flush=True)
+
+    def is_empty_batch(self, batch):
+        try:
+            if batch.shape[0] < 1:
+                return True
+        except AttributeError:
+            pass
+        return False
+
+    def print_and_save_train_losses(self):
+        losses = self.loss.print('trainloss', gpu_id=self.gpu_id)
+        self.train_losses.append([losses[k] for k in losses])
+
+    def validate_and_save(self, model, epoch, best_val):
+        losses = self.evaluate(model)
+        loss = [losses[k] for k in losses if 'saveloss' in k]
+        losses = [losses[k] for k in losses if 'saveloss' not in k]
+
+        self.val_losses.append(losses)
+
+        if loss[0] < best_val:
+            if self.gpu_id == 0:
+                best_val = loss[0]
+                torch.save(self.model, self.model_path, pickle_protocol=4)
+                print('Validation loss improved, model saved.', flush=True)
+
+            self.testing(model)
+
+        elif self.gpu_id == 0:
+            self.save_epoch_model(epoch)
+
+        if self.args.save_curves:
+            self.save_curves()
+
+        return best_val
+
+    def save_epoch_model(self, epoch):
+        path = self.model_path.strip('.pt') + '_epoch.pt'
+        torch.save(self.model, path, pickle_protocol=4)
+
+    def wrap_up_training(self, model):
+        if self.args.epochs and self.gpu_id == 0:
+            path = self.model_path.strip('.pt') + '_end.pt'
+            torch.save(self.model, path, pickle_protocol=4)
+
+        self.model.end()
+        self.evaluate(model)
+        self.testing(model)
 
     def train(self):
         '''
         Main training loop over epochs and training batches.
         '''
-        # initialize optimizer
-        params = filter(lambda p: p.requires_grad, self.model.parameters())
-        optimizer = Adam(params,
-                         lr=self.args.learning_rate,
-                         weight_decay=self.args.alpha_norm)
+        model = self.ddp if hasattr(self, 'ddp') else self.model
+        optimizer = self.initialize_optimizer(model)
+        scaler = torch.cuda.amp.GradScaler()
+        scheduler = self.initialize_scheduler(optimizer)
 
-        # use cosine annealing
-        scheduler = None
-        if self.args.anneal_lr:
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=self.dataset.train_batches)
-
-        # start with a pass over the validation set
+        print_gpu_info = True
         best_val = 1000000
-        self.evaluate()
+        self.evaluate(model)
 
         for epoch in range(self.args.epochs):
-            self.model.train()
-            self.loss.dict = {}
+            if epoch == 0 and self.gpu_id == 0:
+                self.save_initial_model()
 
-            # save initial model
-            if epoch == 0:
-                path = os.path.join(self.args.result_dir, 'model_init.pt')
-                torch.save(self.model, path, pickle_protocol=4)
-                print('Model saved to result directory.', flush=True)
+            self.train_epoch(model, optimizer, scaler, scheduler)
 
-            # loop over batches
-            for i in range(self.dataset.train_batches):
-                batch, sid = self.dataset.get_train_batch(i)
-                # need to check whether it's an empty batch
-                try:
-                    if batch.shape[0] < 1:
-                        break
-                except AttributeError:
-                    pass
+            if print_gpu_info and self.gpu_id == 0:
+                os.system('nvidia-smi')
+                print_gpu_info = False
 
-                # if batch is list, then it's a list of batches
-                if not isinstance(batch, list):
-                    batch = [batch]
-                    sid = [sid]
-
-                for subbatch, subsid in zip(batch, sid):
-                    losses, _, _, = self.model.loss(
-                        subbatch, i, subsid, train=True)
-
-                    # optimize model according to the optimization loss
-                    optkey = [key for key in losses if 'optloss' in key]
-                    losses[optkey[0]].backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    losses = self.loss.append(losses)
-
-                if scheduler is not None:
-                    scheduler.step()
-
-            # print training losses
             if not epoch % self.args.print_freq:
-                losses = self.loss.print('trainloss')
-                self.train_losses.append([losses[k] for k in losses])
+                self.print_and_save_train_losses()
 
-            # run validation pass and save model
             if not epoch % self.args.val_freq:
-                losses, _, _ = self.evaluate()
-                loss = [losses[k] for k in losses if 'saveloss' in k]
-                losses = [losses[k] for k in losses if 'saveloss' not in k]
+                best_val = self.validate_and_save(model, epoch, best_val)
 
-                self.val_losses.append(losses)
+        self.wrap_up_training(model)
 
-                # only save model if validation loss is best so far
-                if loss[0] < best_val:
-                    best_val = loss[0]
-                    torch.save(self.model, self.model_path, pickle_protocol=4)
-                    print('Validation loss improved, model saved.', flush=True)
-
-                    # also compute test loss
-                    self.testing()
-
-                else:
-                    path = self.model_path.strip('.pt') + '_epoch.pt'
-                    torch.save(self.model, path, pickle_protocol=4)
-
-                # save loss plots if needed
-                if self.args.save_curves:
-                    self.save_curves()
-
-        # wrap up training, save model and validation loss
-        if self.args.epochs:
-            path = self.model_path.strip('.pt') + '_end.pt'
-            torch.save(self.model, path, pickle_protocol=4)
-        self.model.end()
-        self.save_validation()
-
-    def testing(self):
-        '''
-        Evaluate model on the test set.
-        '''
+    def eval_batch_iter(self, model, num_batches, batch_func, split):
         self.loss.dict = {}
-        self.model.eval()
+        model.eval()
 
         # loop over test batches
-        for i in range(self.dataset.test_batches):
-            batch, sid = self.dataset.get_test_batch(i)
+        for i in range(num_batches):
+            batch, sid = batch_func(i)
+            if batch is None:
+                break
+
             if not isinstance(batch, list):
                 batch = [batch]
                 sid = [sid]
 
             for subbatch, subsid in zip(batch, sid):
-                loss, output, target = self.model.loss(
-                    subbatch, i, subsid, train=False)
+                if self.args.amp:
+                    with torch.autocast(device_type='cuda',
+                                        dtype=torch.float16):
+                        loss, _, _ = self.model.loss(
+                            subbatch, i, subsid, train=False)
+                else:
+                    loss, _, _ = self.model.loss(
+                        subbatch, i, subsid, train=False)
                 self.loss.append(loss)
 
-        losses = self.loss.print('valloss')
-
-        path = os.path.join(self.args.result_dir, 'test_loss.txt')
+        losses = self.loss.print('valloss', gpu_id=self.gpu_id)
+        path = os.path.join(self.args.result_dir,
+                            f'{split}_loss{self.gpu_id}.txt')
         with open(path, 'w') as f:
             f.write(str(losses))
+
+        return losses
+
+    def testing(self, model):
+        '''
+        Evaluate model on the test set.
+        '''
+        _ = self.eval_batch_iter(model,
+                                 self.dataset.test_batches,
+                                 self.dataset.get_test_batch,
+                                 'test')
 
     def save_curves(self):
         '''
@@ -234,31 +332,20 @@ class Experiment:
             plt.semilogy(val_losses, linewidth=1, label='validation losses')
             plt.legend()
 
-            path = os.path.join(self.args.result_dir, 'losses.svg')
+            path = os.path.join(self.args.result_dir,
+                                f'losses{self.gpu_id}.svg')
             plt.savefig(path, format='svg', dpi=1200)
             plt.close('all')
 
-    def evaluate(self):
+    def evaluate(self, model):
         '''
         Evaluate model on the validation dataset.
         '''
-        self.loss.dict = {}
-        self.model.eval()
-
-        # loop over validation batches
-        for i in range(self.dataset.val_batches):
-            batch, sid = self.dataset.get_val_batch(i)
-            if not isinstance(batch, list):
-                batch = [batch]
-                sid = [sid]
-
-            for subbatch, subsid in zip(batch, sid):
-                loss, output, target = self.model.loss(
-                    subbatch, i, subsid, train=False)
-                self.loss.append(loss)
-
-        losses = self.loss.print('valloss')
-        return losses, None, None
+        losses = self.eval_batch_iter(model,
+                                      self.dataset.val_batches,
+                                      self.dataset.get_test_batch,
+                                      'val')
+        return losses
 
     def classify(self):
         self.model.eval()
@@ -295,18 +382,6 @@ class Experiment:
             self.loss.append(loss)
 
         self.loss.print('valloss')
-
-    def save_validation(self):
-        '''
-        Save validation loss to file.
-        '''
-        loss, output, target = self.evaluate()
-
-        path = os.path.join(self.args.result_dir, 'val_loss.txt')
-        with open(path, 'w') as f:
-            f.write(str(loss))
-
-        self.testing()
 
     def save_validation_subs(self):
         '''
@@ -1687,7 +1762,7 @@ class Experiment:
         self.model.plot_kernels()
 
     def generate(self):
-        self.model.generate(self.dataset.x_train_t)
+        self.model.generate(self.dataset)
 
     def kernel_network_FIR(self):
         self.model.kernel_network_FIR()
@@ -1704,7 +1779,7 @@ class Experiment:
             self.model.save_embeddings()
 
 
-def main(Args):
+def main(Args, gpu_id=None):
     '''
     Main function creating an experiment object and running everything.
     This should be called from launch.py, and it needs an Args object.
@@ -1808,9 +1883,9 @@ def main(Args):
             if args_data is not None:
                 args_data.load_model = args.load_model[i]
                 args_data.result_dir = args.result_dir[i]
-                e = Experiment(args_data, dataset)
+                e = Experiment(args_data, dataset, gpu_id=gpu_id)
             else:
-                e = Experiment(args_new)
+                e = Experiment(args_new, gpu_id=gpu_id)
 
             # only run the functions specified in args
             if Args.func.get('repeat_baseline'):

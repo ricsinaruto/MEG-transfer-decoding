@@ -3,9 +3,12 @@ import torch
 import random
 import pickle
 import mne
+import dill
 import math
 import traceback
 import numpy as np
+import faiss
+from sklearn.cluster import KMeans
 
 from scipy.ndimage import gaussian_filter1d
 from scipy.io import loadmat, savemat
@@ -460,6 +463,92 @@ class CichyDataRandsample(CichyData):
 
 
 class CichyDataRobust(CichyData):
+    def product_quantize(self, x_train, x_val, x_test):
+
+        # convert to contiguous array
+        x_train = np.ascontiguousarray(x_train, dtype=np.float32)
+        x_val = np.ascontiguousarray(x_val, dtype=np.float32)
+        x_test = np.ascontiguousarray(x_test, dtype=np.float32)
+        '''
+        self.res_quantizer = faiss.ResidualQuantizer(x_train.shape[1], 2, 8)
+        self.res_quantizer.train(x_train)
+
+        # encode
+        codes = self.res_quantizer.compute_codes(x_train)
+        x_train = self.res_quantizer.decode(codes)
+
+        codes = self.res_quantizer.compute_codes(x_val)
+        x_val = self.res_quantizer.decode(codes)
+
+        codes = self.res_quantizer.compute_codes(x_test)
+        x_test = self.res_quantizer.decode(codes)
+        '''
+
+        # put the 306 channels into 6 buckets based on covariance
+        # in each bucket the channels should have similar covariances
+
+        num_buckets = 40
+
+        # Compute the covariance matrix of the features
+        cov_matrix = np.cov(x_train, rowvar=False)
+
+        # Apply K-means clustering on the covariance matrix
+        kmeans = KMeans(n_clusters=num_buckets, random_state=0).fit(cov_matrix)
+
+        # Create a dictionary to store the features in each bucket
+        buckets = {i: [] for i in range(num_buckets)}
+
+        # Assign features to the corresponding buckets
+        for feature_idx, bucket in enumerate(kmeans.labels_):
+            buckets[bucket].append(feature_idx)
+
+
+        num_subspaces = 2  # Number of subspaces
+        num_clusters_per_subspace = 6  # Total quantization bins = num_clusters_per_subspace ** num_subspaces = 100k
+
+        # create a residual quantizer for each bucket of features
+        for bucket, features in buckets.items():
+            res_quant = faiss.ResidualQuantizer(len(features), num_subspaces, num_clusters_per_subspace)
+            res_quant.train(np.ascontiguousarray(x_train[:, features]))
+
+            xt = np.ascontiguousarray(x_train[:, features], dtype=np.float32)
+            codes = res_quant.compute_codes(xt)
+            x_train[:, features] = res_quant.decode(codes)
+
+            xv = np.ascontiguousarray(x_val[:, features], dtype=np.float32)
+            codes = res_quant.compute_codes(xv)
+            x_val[:, features] = res_quant.decode(codes)
+
+            xt = np.ascontiguousarray(x_test[:, features], dtype=np.float32)
+            codes = res_quant.compute_codes(xt)
+            x_test[:, features] = res_quant.decode(codes)
+
+        self.norm2 = RobustScaler()
+        self.norm2.fit(x_train)
+        x_train = self.norm2.transform(x_train)
+        x_val = self.norm2.transform(x_val)
+        x_test = self.norm2.transform(x_test)
+
+        return x_train, x_val, x_test
+    
+    def save_data(self):
+        super().save_data()
+
+        '''
+        # check if self.res_quantizer and self.norm2 exist
+        if hasattr(self, 'res_quantizer') and hasattr(self, 'norm2'):
+            # save res_quantizer and norm2
+            path = os.path.join('/'.join(self.args.dump_data.split('/')[:-1]),
+                                'quantizer')
+            with open(path, 'wb') as file:
+                pickle.dump(self.res_quantizer, file)
+
+            path = os.path.join('/'.join(self.args.dump_data.split('/')[:-1]),
+                                'norm2')
+            with open(path, 'wb') as file:
+                pickle.dump(self.norm2, file)
+        '''
+
     def normalize(self, x_train, x_val, x_test):
         '''
         Standardize and whiten data if needed.
@@ -475,6 +564,12 @@ class CichyDataRobust(CichyData):
         # if needed, remove covariance with PCA
         if self.args.whiten:
             x_train, x_val, x_test = self.whiten(x_train, x_val, x_test)
+
+        # check if args has product_quant attribute
+        if hasattr(self.args, 'product_quant'):
+            if self.args.product_quant:
+                x_train, x_val, x_test = self.product_quantize(
+                    x_train, x_val, x_test)
 
         return x_train.T, x_val.T, x_test.T
 
@@ -817,17 +912,9 @@ class CichyQuantized(MRCData):
         self.x_test = np.concatenate(tuple(x_tests), axis=1)
 
         if not args.bypass:
-            xtn, xv, xtt = self.encode(self.x_train[:-2],
-                                    self.x_val[:-2],
-                                    self.x_test[:-2])
+            self.encode()
 
-            # append back labels and sid
-            self.x_train_t = np.append(xtn, self.x_train[-2:, :-1], axis=0)
-            self.x_val_t = np.append(xv, self.x_val[-2:, :-1], axis=0)
-            self.x_test_t = np.append(xtt, self.x_test[-2:, :-1], axis=0)
-
-            if not os.path.isdir(args.dump_data):
-                os.mkdir(args.dump_data)
+            os.makedirs(args.dump_data, exist_ok=True)
 
             self.save_data()
             self.set_common(args)
@@ -864,6 +951,16 @@ class CichyQuantized(MRCData):
             event_times = [(int(ev[0]/resample), ev[2]) for ev in event_times]
 
             dataset = np.load(path)
+
+            # filter if needed
+            if args.filter:
+                iir_params = dict(order=5, ftype='butter')
+                dataset = mne.filter.filter_data(dataset,
+                                                 1000,
+                                                 args.filter[0],
+                                                 args.filter[1],
+                                                 method='iir',
+                                                 iir_params=iir_params)
 
             # choose first 306 channels and downsample
             dataset = dataset[args.num_channels, ::resample]
@@ -962,10 +1059,14 @@ class CichyQuantized(MRCData):
         x = np.append(digitized[:, :-1], digitized[:, 1:], axis=0)
         return x
 
-    def encode(self, xtn, xv, xtt):
+    def encode(self):
         '''
         Encode data using mu-law companding.
         '''
+        xtn = self.x_train[:-2]
+        xv = self.x_val[:-2]
+        xtt = self.x_test[:-2]
+
         xtn = np.clip(xtn, -self.args.num_clip, self.args.num_clip)
 
         self.maxabs = MaxAbsScaler()
@@ -977,7 +1078,13 @@ class CichyQuantized(MRCData):
         xv = np.clip(xv, -1, 1)
         xtt = np.clip(xtt, -1, 1)
 
-        return self.mulaw(xtn), self.mulaw(xv), self.mulaw(xtt)
+        xtn = self.mulaw(xtn)
+        xv = self.mulaw(xv)
+        xtt = self.mulaw(xtt)
+
+        self.x_train_t = np.append(xtn, self.x_train[-2:, :-1], axis=0)
+        self.x_val_t = np.append(xv, self.x_val[-2:, :-1], axis=0)
+        self.x_test_t = np.append(xtt, self.x_test[-2:, :-1], axis=0)
 
     def decode(self, x):
         '''
@@ -1000,18 +1107,16 @@ class CichyQuantized(MRCData):
         if i == 0:
             self.inds[split] = np.random.permutation(data.shape[0])
 
-        if len(self.inds[split]) > self.bs[split]:
-            bs = self.bs[split]
-        else:
-            bs = len(self.inds[split])
+        bs = min(self.bs[split], len(self.inds[split]))
+        if bs == 0:
+            # print(split, ' ', i)
+            return None, None, None
 
         # sample random indices
         inds = self.inds[split][:bs]
 
-        if data.is_cuda:
-            data = data[inds]
-        else:
-            data = data[inds].cuda()
+        # place on correct gpu if not already there
+        data = data[inds] if data.is_cuda else data[inds].to(self.args.device)
 
         # remove the already sampled indices
         self.inds[split] = self.inds[split][bs:]
@@ -1019,9 +1124,12 @@ class CichyQuantized(MRCData):
         # loop over channel batching
         batch = []
         for j in range(int(num_chn/model_chn_dim)):
+            targets = data[:, j*model_chn_dim+num_chn:
+                           (j+1)*model_chn_dim+num_chn, :]
+
             # data: 306 input chs, 306 target chns, 1 condition id, 1 subject id
             d = {'inputs': data[:, j*model_chn_dim:(j+1)*model_chn_dim, :],
-                 'targets': data[:, j*model_chn_dim+num_chn:(j+1)*model_chn_dim+num_chn, :],
+                 'targets': targets,
                  'condition': data[:, -2:-1, :],
                  'sid': data[:, -1:, :],
                  'ch_ids': np.arange(j*model_chn_dim, (j+1)*model_chn_dim)}
@@ -1029,10 +1137,36 @@ class CichyQuantized(MRCData):
 
         # return data and subject indices
         return batch, [d['sid'] for d in batch], inds
-    
+
     def get_batch(self, i, data, split='train'):
-        batch, sid, inds =  self._get_batch(i, data, split)
+        batch, sid, inds = self._get_batch(i, data, split)
         return batch, sid
+
+    def select_data(self, data, args, split):
+        # transform to examples
+        data = self.create_examples(data)
+
+        # subsample data
+        data = data[::int(1/args.max_trials)]
+
+        # select data based on gpu_id
+        num_examples = data.shape[0] // args.num_gpus
+        upper = (args.gpu_id + 1) * num_examples
+        if args.gpu_id == args.num_gpus - 1:
+            upper = data.shape[0]
+
+        data = data[args.gpu_id * num_examples:upper]
+        data = torch.IntTensor(data)
+        size = data.element_size() * data.nelement() / 1e9
+
+        # check size of data and load to gpu if it's less than 2GB
+        if size < 2 or (size < 3 and split == 'train'):
+            data = data.to(args.device)
+            print(f'Loaded {split} data on gpu {args.gpu_id}')
+        else:
+            print(f'Loaded {split} data on cpu')
+
+        return data
 
     def set_common(self, args=None):
         if isinstance(self.args.sample_rate, list):
@@ -1042,57 +1176,34 @@ class CichyQuantized(MRCData):
         args.num_channels = len(args.num_channels)
         args.num_channels = int((args.num_channels-2)/2)
 
-        # transform to examples
-        self.x_train_t = self.create_examples(self.x_train_t)
-        self.x_val_t = self.create_examples(self.x_val_t)
-        self.x_test_t = self.create_examples(self.x_test_t)
+        self.x_train_t = self.select_data(self.x_train_t, args, 'train')
+        self.x_val_t = self.select_data(self.x_val_t, args, 'val')
+        self.x_test_t = self.select_data(self.x_test_t, args, 'test')
 
-        # only use subset of data
-        sampling = int(1/args.max_trials)
-        self.x_train_t = self.crop_trials(self.x_train_t, sampling)
-        self.x_val_t = self.crop_trials(self.x_val_t, sampling)
-        self.x_test_t = self.crop_trials(self.x_test_t, sampling)
-
-        try:
-            self.x_train_t = torch.Tensor(self.x_train_t).long().cuda()
-            self.x_val_t = torch.Tensor(self.x_val_t).long().cuda()
-            self.x_test_t = torch.Tensor(self.x_test_t).long().cuda()
-            print('Data loaded on gpu.')
-        except RuntimeError:
-            self.x_train_t = torch.Tensor(self.x_train_t).long()
-            self.x_val_t = torch.Tensor(self.x_val_t).long()
-            self.x_test_t = torch.Tensor(self.x_test_t).long()
-            print('Data loaded on cpu.')
-
-        bs = args.batch_size
+        bs = args.batch_size // args.num_gpus
         self.bs = {'train': bs, 'val': bs, 'test': bs}
 
-        self.train_batches = math.ceil(
-            self.x_train_t.shape[0] / self.bs['train']) 
-        self.val_batches = math.ceil(self.x_val_t.shape[0] / self.bs['val'])
-        self.test_batches = math.ceil(self.x_test_t.shape[0] / self.bs['test'])
+        self.train_batches = math.ceil(self.x_train_t.shape[0] / bs)
+        self.val_batches = math.ceil(self.x_val_t.shape[0] / bs)
+        self.test_batches = math.ceil(self.x_test_t.shape[0] / bs)
 
         print('Train batches: ', self.train_batches)
         print('Validation batches: ', self.val_batches)
         print('Test batches: ', self.test_batches)
-
-    def crop_trials(self, data, sampling):
-        inds = np.arange(data.shape[0])[::sampling]
-        return data[inds]
 
     def create_examples(self, x):
         '''
         Create examples from the continuous data (x).
         '''
         sr = self.args.sample_rate
-        inds = np.arange(x.shape[2] - sr)[::int(sr/2)]
+        inds = np.arange(x.shape[2] - sr)[::self.args.example_shift]
 
         x = [x[:, :, ind:ind+sr] for ind in inds]
         x = np.concatenate(x)
 
         return x
 
-    def load_mat_data(self, args):
+    def load_mat_data(self, args, dtype=np.int16):
         '''
         Loads ready-to-train splits from mat files.
         '''
@@ -1106,9 +1217,9 @@ class CichyQuantized(MRCData):
             path = os.path.join(args.load_data, 'ch' + str(i) + '.mat')
             data = loadmat(path)
 
-            x_train_ts.append(np.array(data['x_train_t']))
-            x_val_ts.append(np.array(data['x_val_t']))
-            x_test_ts.append(np.array(data['x_test_t']))
+            x_train_ts.append(np.array(data['x_train_t'], dtype=dtype))
+            x_val_ts.append(np.array(data['x_val_t'], dtype=dtype))
+            x_test_ts.append(np.array(data['x_test_t'], dtype=dtype))
 
         self.x_train_t = np.array(x_train_ts).transpose(1, 0, 2)
         self.x_val_t = np.array(x_val_ts).transpose(1, 0, 2)
@@ -1131,6 +1242,160 @@ class CichyQuantized(MRCData):
 
         path = os.path.join(self.args.dump_data, 'maxabs_scaler')
         pickle.dump(self.maxabs, open(path, 'wb'))
+
+
+class CichyProductQuantized(CichyQuantized):
+    def load_data(self, args):
+        sr = args.sr_data
+        args.sr_data = args.original_sr
+
+        x_trains, x_vals, x_tests = super().load_data(args)
+        args.sr_data = sr
+
+        return x_trains, x_vals, x_tests
+
+    def set_common(self, args):
+        super().set_common(args)
+        self.args.num_channels = self.x_train_t.shape[1] - 2
+
+    def load_mat_data(self, args):
+        super().load_mat_data(args, dtype=np.int16)
+
+        self.quantizers = []
+        path = os.path.join(args.load_data, 'product_quantizers')
+        for i in range(self.args.num_buckets):
+            file_path = os.path.join(path, f'product_quantizer_{i}.npz')
+            # Load the ResidualQuantizer's parameters
+            data = np.load(file_path)
+
+            rq = faiss.ResidualQuantizer(
+                int(data['d']), int(data['M']), int(data['nbits']))
+            faiss.copy_array_to_vector(data['codebooks'], rq.codebooks)
+            rq.is_trained = True
+            self.quantizers.append(rq)
+
+        path = os.path.join(args.load_data, 'buckets')
+        self.buckets = pickle.load(open(path, 'rb'))
+
+    def save_data(self):
+        '''
+        Save final data to disk for easier loading next time.
+        '''
+        self.maxabs = []
+        super().save_data()
+
+        path = os.path.join(self.args.dump_data, 'product_quantizers')
+        os.makedirs(path, exist_ok=True)
+        for i, q in enumerate(self.quantizers):
+            file_path = os.path.join(path, f'product_quantizer_{i}.npz')
+
+            cb = faiss.vector_to_array(q.codebooks)
+            np.savez(file_path,
+                     codebooks=cb,
+                     M=2,
+                     nbits=self.args.num_bits//2,
+                     d=len(self.buckets[i]))
+
+        path = os.path.join(self.args.dump_data, 'buckets')
+        pickle.dump(self.buckets, open(path, 'wb'))
+
+    def encode(self):
+        # chop last 2 channels
+        xtn = self.x_train[:-2, :].T
+        xv = self.x_val[:-2, :].T
+        xt = self.x_test[:-2, :].T
+
+        xtn, xv, xt = self.product_quantize(xtn, xv, xt)
+
+        xtn = np.append(xtn, self.x_train[-2:, :].astype(np.int16), axis=0)
+        xv = np.append(xv, self.x_val[-2:, :].astype(np.int16), axis=0)
+        xt = np.append(xt, self.x_test[-2:, :].astype(np.int16), axis=0)
+
+        # resample to 100 Hz
+        resample = self.args.original_sr // self.args.sr_data
+        self.x_train_t = xtn[:, ::resample]
+        self.x_val_t = xv[:, ::resample]
+        self.x_test_t = xt[:, ::resample]
+
+    def product_quantize(self, x_train, x_val, x_test):
+        # convert to contiguous array
+        x_train = np.ascontiguousarray(x_train, dtype=np.float32)
+        x_val = np.ascontiguousarray(x_val, dtype=np.float32)
+        x_test = np.ascontiguousarray(x_test, dtype=np.float32)
+
+        # put the 306 channels into 30 buckets based on covariance
+        # in each bucket the channels should have similar covariances
+        num_buckets = self.args.num_buckets
+
+        # Compute the covariance matrix of the features
+        cov_matrix = np.cov(x_train, rowvar=False)
+
+        # Apply K-means clustering on the covariance matrix
+        kmeans = KMeans(n_clusters=num_buckets, random_state=0).fit(cov_matrix)
+
+        # Create a dictionary to store the features in each bucket
+        buckets = {i: [] for i in range(num_buckets)}
+
+        # Assign features to the corresponding buckets
+        for feature_idx, bucket in enumerate(kmeans.labels_):
+            buckets[bucket].append(feature_idx)
+
+        quantizers = []
+        xtrains = []
+        xvals = []
+        xtests = []
+        # create a residual quantizer for each bucket of features
+        for bucket, features in buckets.items():
+            res_quant = faiss.ResidualQuantizer(len(features),
+                                                2,
+                                                self.args.num_bits//2)
+            res_quant.train(np.ascontiguousarray(x_train[:, features]))
+            quantizers.append(res_quant)
+
+            xt = self.compute_codes(res_quant, x_train[:, features])
+            xtrains.append(xt)
+
+            xv = self.compute_codes(res_quant, x_val[:, features])
+            xvals.append(xv)
+
+            xt = self.compute_codes(res_quant, x_test[:, features])
+            xtests.append(xt)
+
+        self.quantizers = quantizers
+        self.buckets = buckets
+
+        recon = self.reconstruct(np.array(xvals))
+        err = ((x_val - recon)**2).sum() / (x_val ** 2).sum()
+        print('Product quantization reconstruction error: ', err)
+
+        return np.array(xtrains), np.array(xvals), np.array(xtests)
+
+    def compute_codes(self, quantizer, x):
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        codes = quantizer.compute_codes(x).astype(np.int16)
+
+        # flatten vector with 256 x 128 unique values into a single vocab
+        multiplier = 2**self.args.num_bits // 256
+        codes = codes[:, 0] * multiplier + codes[:, 1]
+        return codes
+
+    def reconstruct(self, x):
+        # reconstruct the 306 channels from the 30 buckets
+        x = np.ascontiguousarray(x)
+
+        # invert vocab to 256 x 128 unique values
+        divider = 2**self.args.num_bits // 256
+        codes = np.zeros((x.shape[0], x.shape[1], 2), dtype=np.uint8)
+        codes[:, :, 1] = x % divider
+        codes[:, :, 0] = x // divider
+
+        # reconstruct the 306 channels from the 30 buckets
+        num_channels = sum([len(feats) for feats in self.buckets.values()])
+        x_recon = np.zeros((x.shape[1], num_channels))
+        for bucket, feats in self.buckets.items():
+            x_recon[:, feats] = self.quantizers[bucket].decode(codes[bucket])
+
+        return x_recon
 
 
 class CichyQuantizedRandomCond(CichyQuantized):

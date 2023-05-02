@@ -1,16 +1,15 @@
 import os
 import torch
-import torch.nn.functional as F
 import numpy as np
-from transformers import ReformerConfig
+from transformers import GPT2Config
 
-from transformers_quantized import TransformerQuantizedFlat
-from cichy_data import CichyData, CichyContData, CichyQuantized
+from gpt_quantized import GPT2Flat_masked
+from cichy_data import CichyProductQuantized
 
 
 class Args:
     gpu = '1'  # cuda gpu index
-    func = {'train': True}  # dict of functions to run from training.py
+    func = {'generate': True}  # dict of functions to run from training.py
 
     def __init__(self):
         n = 1  # can be used to do multiple runs, e.g. over subjects
@@ -23,13 +22,24 @@ class Args:
         self.learning_rate = 0.0001  # learning rate for Adam
         self.max_trials = 1.0  # ratio of training data (1=max)
         self.val_max_trials = False
-        self.batch_size = 2  # batch size for training and validation data
+        self.batch_size = 1  # batch size for training and validation data
         self.epochs = 1000  # number of loops over training data
         self.val_freq = 2  # how often to validate (in epochs)
         self.print_freq = 1  # how often to print metrics (in epochs)
         self.anneal_lr = False  # whether to anneal learning rate
         self.save_curves = True  # whether to save loss curves to file
-        self.load_model = False
+        self.load_model = [os.path.join(
+            '/',
+            'well',
+            'woolrich',
+            'users',
+            'yaq921',
+            'MEG-transfer-decoding',  # path(s) to save model and others
+            'results',
+            'cichy_epoched',
+            'subj1',
+            'cont_quantized',
+            'GPT2Flat_masked')]
         self.result_dir = [os.path.join(
             '/',
             'well',
@@ -41,9 +51,9 @@ class Args:
             'cichy_epoched',
             'subj1',
             'cont_quantized',
-            'reformer')]
-        self.model = TransformerQuantizedFlat  # class of model to use
-        self.dataset = CichyQuantized  # dataset class for loading and handling data
+            'GPT2Flat_masked')]
+        self.model = GPT2Flat_masked  # class of model to use
+        self.dataset = CichyProductQuantized  # dataset class for loading and handling data
 
         # wavenet arguments
         self.activation = torch.nn.Identity()  # activation function for models
@@ -54,8 +64,9 @@ class Args:
         self.groups = 306
         self.kernel_size = 2  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 128]  # start and end of timesteps within trials
-        self.rf = 64  # receptive field of wavenet, 2*rf - 1
+        self.sample_rate = [0, 200]  # start and end of timesteps within trials
+        self.example_shift = 100
+        self.rf = 128  # receptive field of wavenet, 2*rf - 1
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
@@ -80,25 +91,21 @@ class Args:
 
         # GPT2 arguments
         n_embd = 12*8
-        self.gpt2_config = ReformerConfig(
-            attention_head_size=64,
-            attn_layers=['local', 'lsh', 'local', 'lsh', 'local', 'lsh'],
-            axial_pos_embds=True,
-            axial_pos_shape=[307, 128],
-            axial_pos_embds_dim=[64, n_embd-64],
-            feed_forward_size=512,
-            hidden_dropout_prob=0.05,
-            hidden_size=n_embd,
-            is_decoder=True,
-            local_attn_chunk_length=128,
-            local_num_chunks_before=1,
-            local_attention_probs_dropout_prob=0.05,
-            lsh_attn_chunk_length=128,
-            lsh_num_chunks_before=1,
-            max_position_embeddings=78592,
-            num_attention_heads=2,
-            vocab_size=257
+        self.gpt2_config = GPT2Config(
+            vocab_size=16384,
+            n_positions=240 * 31,
+            n_embd=n_embd,
+            n_layer=8,
+            n_head=8,
+            resid_pdrop=0.2,
+            embd_pdrop=0.2,
+            attn_pdrop=0.2,
+            bos_token_id=255,
+            eos_token_id=255,
+            name_or_path=None,
+            use_cache=False
         )
+        self.gpt2_config.num_channels = 31
 
         # quantized wavenet arguments
         self.skips_shift = 1
@@ -119,10 +126,13 @@ class Args:
         data_path = os.path.join('/', 'gpfs2', 'well', 'woolrich', 'projects',
                                  'cichy118_cont', 'preproc_data_osl', 'subj1')
         self.data_path = [[os.path.join(data_path, 'subj1_50hz.npy')]]  # path(s) to data directory
-        self.num_channels = list(range(614))  # channel indices
+        self.num_channels = list(range(32))  # channel indices
+        self.num_buckets = 30
+        self.num_bits = 14
         self.numpy = True  # whether data is saved in numpy format
         self.crop = 1  # cropping ratio for trials
         self.whiten = False  # pca components used in whitening
+        self.filter = None
         self.group_whiten = False  # whether to perform whitening at the GL
         self.split = np.array([0, 0.1])  # validation split (start, end)
         self.sr_data = 100  # sampling rate used for downsampling
@@ -132,7 +142,7 @@ class Args:
         self.subjects_data = False  # list of subject inds to use in group data
         self.save_whiten = False
         self.num_clip = 4
-        self.dump_data = [os.path.join(data_path, '50hz100hz_quantized_clamp4')]  # path(s) for dumping data
+        self.dump_data = [os.path.join(data_path, '50hz100hz_productquantized')]  # path(s) for dumping data
         self.load_data = self.dump_data  # path(s) for loading data files
 
         # analysis arguments
@@ -143,7 +153,8 @@ class Args:
         self.halfwin = 5  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
-        self.generate_length = self.sr_data * 3600  # generated timeseries len
+        self.generate_length = self.sr_data * 2  # generated timeseries len
+        self.generate_shift = 10
         self.generate_mode = 'recursive'  # IIR or FIR mode for wavenet generation
         self.generate_input = 'data'  # input type for generation
         self.generate_sampling = 'top-p'

@@ -1,6 +1,8 @@
 launch_q.py
 launch_q2.py
 launch_q3.py
+launch_ddp_q.py
+launch_ddp_q2.py
 args_q.py
 args_q2.py
 args_q3.py
@@ -46,6 +48,7 @@ scripts/plot.py
 scripts/plot.py
 scripts/plot.py
 scripts/classifiers_linear.py
+scripts/openapi.py
 scripts/pnet.c
 notebooks/*.pdf
 
