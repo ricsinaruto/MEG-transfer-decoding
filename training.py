@@ -165,7 +165,7 @@ class Experiment:
 
                 # find the optimization loss
                 optkey = [key for key in losses if 'optloss' in key]
-                scaler.scale(optkey[0]).backward()
+                scaler.scale(losses[optkey[0]]).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -231,7 +231,7 @@ class Experiment:
 
         return best_val
 
-    def save_epoch_model(self, epoch):
+    def save_epoch_model(self):
         path = self.model_path.strip('.pt') + '_epoch.pt'
         torch.save(self.model, path, pickle_protocol=4)
 
@@ -258,8 +258,8 @@ class Experiment:
         self.evaluate(model)
 
         for epoch in range(self.args.epochs):
-            if epoch == 0 and self.gpu_id == 0:
-                self.save_initial_model()
+            # if epoch == 0 and self.gpu_id == 0:
+            #     self.save_initial_model()
 
             self.train_epoch(model, optimizer, scaler, scheduler)
 

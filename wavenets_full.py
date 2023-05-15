@@ -414,15 +414,19 @@ class WavenetFull(WavenetSimple):
 
         return all_losses, None, None
 
-    def loss_(self, data, i=0, sid=None, train=True, criterion=None):
-        logits = self.forward(data)
-        past_kv = None
-        if isinstance(logits, tuple):
-            logits, past_kv = logits
+    def pack_loss(self, loss, acc, top5_acc):
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss,
+                  'valloss/Validation accuracy: ': acc,
+                  'trainloss/Train accuracy: ': acc,
+                  'valloss/Validation top-5 accuracy: ': top5_acc,
+                  'trainloss/Train top-5 accuracy: ': top5_acc}
+        return losses
 
-        targets = data['targets'][:, :, -logits.shape[-2]:]
+    def metrics(self, logits, targets):
+        targets = targets[:, :, -logits.shape[-2]:]
 
-        shape = targets.shape
         targets = targets.reshape(-1).long()
         logits = logits.reshape(-1, logits.shape[-1])
 
@@ -435,13 +439,17 @@ class WavenetFull(WavenetSimple):
         # compute top-5 accuracy
         top5_acc = topk_accuracy(logits, targets, k=5)
 
-        losses = {'trainloss/optloss/Training loss: ': loss,
-                  'valloss/valcriterion/Validation loss: ': loss,
-                  'valloss/saveloss/none': loss,
-                  'valloss/Validation accuracy: ': acc,
-                  'trainloss/Train accuracy: ': acc,
-                  'valloss/Validation top-5 accuracy: ': top5_acc,
-                  'trainloss/Train top-5 accuracy: ': top5_acc}
+        return (loss, acc, top5_acc, preds, targets)
+
+    def loss_(self, data, i=0, sid=None, train=True, criterion=None):
+        logits = self.forward(data)
+        past_kv = None
+        if isinstance(logits, tuple):
+            logits, past_kv = logits
+
+        loss, acc, top5_acc, preds, targets = self.metrics(logits,
+                                                           data['targets'])
+        losses = self.pack_loss(loss, acc, top5_acc)
 
         if self.args.gpt2_config.vocab_size < 500:
             losses, pred, target = self.compute_mse(preds, targets, losses)

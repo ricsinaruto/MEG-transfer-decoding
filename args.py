@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from transformers import GPT2Config
 
-from gpt_quantized import GPT2Flat_masked
+from gpt_quantized import GPT2Flat_fullattention
 from cichy_data import CichyProductQuantized
 
 
@@ -22,6 +22,7 @@ class Args:
         self.learning_rate = 0.0001  # learning rate for Adam
         self.max_trials = 1.0  # ratio of training data (1=max)
         self.val_max_trials = False
+        self.amp = False
         self.batch_size = 1  # batch size for training and validation data
         self.epochs = 1000  # number of loops over training data
         self.val_freq = 2  # how often to validate (in epochs)
@@ -39,7 +40,8 @@ class Args:
             'cichy_epoched',
             'subj1',
             'cont_quantized',
-            'GPT2Flat_masked')]
+            'GPT2Flat_fullattention',
+            'model_epoch32.pt')]
         self.result_dir = [os.path.join(
             '/',
             'well',
@@ -51,8 +53,9 @@ class Args:
             'cichy_epoched',
             'subj1',
             'cont_quantized',
-            'GPT2Flat_masked')]
-        self.model = GPT2Flat_masked  # class of model to use
+            'GPT2Flat_fullattention',
+            'gen360_shift1')]
+        self.model = GPT2Flat_fullattention  # class of model to use
         self.dataset = CichyProductQuantized  # dataset class for loading and handling data
 
         # wavenet arguments
@@ -64,8 +67,8 @@ class Args:
         self.groups = 306
         self.kernel_size = 2  # convolutional kernel size
         self.timesteps = 1  # how many timesteps in the future to forecast
-        self.sample_rate = [0, 200]  # start and end of timesteps within trials
-        self.example_shift = 100
+        self.sample_rate = [0, 240]  # start and end of timesteps within trials
+        self.example_shift = 120
         self.rf = 128  # receptive field of wavenet, 2*rf - 1
         rf = 128
         ks = self.kernel_size
@@ -97,9 +100,9 @@ class Args:
             n_embd=n_embd,
             n_layer=8,
             n_head=8,
-            resid_pdrop=0.2,
-            embd_pdrop=0.2,
-            attn_pdrop=0.2,
+            resid_pdrop=0.1,
+            embd_pdrop=0.1,
+            attn_pdrop=0.1,
             bos_token_id=255,
             eos_token_id=255,
             name_or_path=None,
@@ -153,11 +156,11 @@ class Args:
         self.halfwin = 5  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
-        self.generate_length = self.sr_data * 2  # generated timeseries len
-        self.generate_shift = 10
+        self.generate_length = self.sr_data * 1  # generated timeseries len
         self.generate_mode = 'recursive'  # IIR or FIR mode for wavenet generation
         self.generate_input = 'data'  # input type for generation
         self.generate_sampling = 'top-p'
+        self.generate_shift = 1
         self.top_p = 0.8
         self.individual = True  # whether to analyse individual kernels
         self.anal_lr = 0.001  # learning rate for input backpropagation

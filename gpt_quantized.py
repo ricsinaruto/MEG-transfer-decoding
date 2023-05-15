@@ -3,9 +3,11 @@ from torch.nn.parameter import Parameter
 import torch
 import os
 import numpy as np
+import gc
 from scipy.io import savemat
 
-from wavenets_full import WavenetFullChannelMixMixin, sample
+from wavenets_full import WavenetFullChannelMixMixin, sample, accuracy
+from wavenets_simple import topk_accuracy
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block
@@ -34,6 +36,12 @@ class Embeddings(Module):
         self.apply(self.init_weights)
 
     def init_weights(self, module):
+        '''
+        Initialize weights of embedding layers
+
+        Args:
+            module (torch.nn.Module): module to initialize
+        '''
         if isinstance(module, Embedding):
             module.weight.data.normal_(mean=0.0, std=0.02)
 
@@ -111,6 +119,8 @@ class GPT2MEG(WavenetFullChannelMixMixin):
 
         # channel dim for model
         self.num_channels = args.num_channels
+
+        # check if args has model_chn_dim and set self.num_channels
         if hasattr(args, 'model_chn_dim'):
             self.num_channels = args.model_chn_dim
 
@@ -179,12 +189,14 @@ class GPT2MEG(WavenetFullChannelMixMixin):
 
 
 def create_parameter(shape):
+    # Create a random tensor with the given shape.
     tensor = torch.normal(size=shape,
                           dtype=torch.float32,
                           requires_grad=True,
                           device='cuda',
                           mean=0.0,
                           std=0.02)
+    # Wrap the tensor in a Parameter to enable autograd.
     return Parameter(tensor)
 
 
@@ -254,6 +266,7 @@ class EmbeddingsFlat(Embeddings):
     def __init__(self, args, num_channels):
         super().__init__(args, num_channels)
 
+        # create quantization embedding
         self.quant_emb = ListEmbedding(args)
 
         # create separator embedding
@@ -415,8 +428,13 @@ class GPT2Flat(GPT2MEG):
 
             self.set_chid_head(0)
             skip = False
-
             past_kv = None
+
+            # Release unused GPU memory and monitor memory usage
+            # torch.cuda.empty_cache()
+            # print("Memory allocated: ", torch.cuda.memory_allocated())
+            # print("Memory cached: ", torch.cuda.memory_reserved())
+
             for t in range(gen_shift):
                 for c in range(self.num_channels+1):
                     if not skip:
@@ -426,6 +444,7 @@ class GPT2Flat(GPT2MEG):
                             'condition': cond_ex,
                             'past_key_values': past_kv}, chid=chid)
                         if logits is not None:
+                            logits = logits.detach()
                             inputs = sample(self.args, logits)
 
                     self.set_tid(end_ind+t-chunk)
@@ -440,7 +459,7 @@ class GPT2Flat(GPT2MEG):
                     elif t < gen_shift - 1:
                         # add separator token
                         sep_ids = torch.zeros(1, 1, dtype=torch.int32)
-                        sep_ids = sep_ids.to(inputs.device)
+                        sep_ids = sep_ids.to(data.device)
                         sep_emb = self.embeddings.sep_emb(sep_ids)
 
                         out = self.gpt2(inputs_embeds=sep_emb,
@@ -449,7 +468,8 @@ class GPT2Flat(GPT2MEG):
                         past_kv = out.past_key_values
 
                         self.set_chid_head(0)
-                        out = self.reshape_output(self.head(out[0]))
+                        out = out[0].detach()
+                        out = self.reshape_output(self.head(out))
                         inputs = sample(self.args, out)
                         skip = True
 
@@ -470,6 +490,23 @@ class GPT2Flat(GPT2MEG):
         name = 'generated_decoded.mat'
         savemat(os.path.join(self.args.result_dir, name), {'X': data})
 
+        # check reconstruction of real data
+        xtrain = xtrain[:, :channels, :xtrain.shape[2]//2]
+        xtrain = xtrain.permute(1, 0, 2).reshape(channels, -1)
+        recon = dataset.reconstruct(xtrain.cpu().numpy())
+
+        # save reconstruction to result_dir for later
+        name = 'reconstruction_xtrain.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': recon})
+
+    def crop_kv(self, kv, ind):
+        new_kv = tuple()
+        for lyr in len(kv):
+            tup = (kv[lyr][0][:, :, :, :ind], kv[lyr][1][:, :, :, :ind])
+            new_kv.append(tup)
+
+        return new_kv
+
 
 class GPT2Flat_fullattention(GPT2Flat):
     def build_model(self, args):
@@ -482,6 +519,67 @@ class GPT2Flat_fullattention(GPT2Flat):
 
         self.gpt2.wte = None
 
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        '''
+        Recursively calculate the loss of a trained model
+        for every channel in the current timestep.
+        '''
+        if not getattr(self.args, 'recursive_loss', None):
+            return self.loss_(data, i, sid, train, criterion)
+
+        sr = self.args.sample_rate
+        shift = self.args.generate_shift
+        num_chn = self.args.num_channels + 1
+        self.out_times = shift
+        self.head.out_times = shift
+        self.use_cache = True
+
+        inputs = data['inputs']
+        cond = data['condition']
+        outputs = torch.zeros(inputs[:, :, -shift:].shape).to(inputs.device)
+        sampled = torch.zeros(outputs.shape).to(inputs.device)
+
+        out_og, past_kv_og = self.forward({'inputs': inputs,
+                                           'condition': cond})
+        out_og = out_og.detach()
+
+        # set first channel with out_og
+        outputs[:, :1, :] = out_og[:, :1, :]
+        sampled[:, :1, :] = sample(self.args, out_og[:, :1, :])
+
+        # only predict one timestep
+        self.out_times = 1
+        self.head.out_times = 1
+        self.embeddings.out_times = 1
+
+        for t in range(shift):
+            past_ind = (sr-shift+t) * num_chn + 1
+            past_kv = self.crop_kv(past_kv_og, past_ind)
+
+            inputs = sampled[:, :1, t:t+1]
+            cond_ex = cond[:, :, -shift+t:-shift+t+1]
+            self.set_tid(sr-shift+t)
+
+            for c in range(self.num_channels-1):
+                self.set_chid_embs(c)
+                self.set_chid_head(c+1)
+
+                logits, past_kv = self.forward({
+                    'inputs': inputs,
+                    'condition': cond_ex,
+                    'past_key_values': past_kv}, chid=c)
+
+                logits = logits.detach()
+                inputs = sample(self.args, logits)
+
+                outputs[:, c+1:c+2, t:t+1] = logits
+                sampled[:, c+1:c+2, t:t+1] = inputs
+
+        # calculate loss
+        losses = self.pack_loss(self.metrics(outputs, data['inputs'])[:3])
+
+        return losses, None, None
+
 
 class GPT2Flat_masked(GPT2Flat_fullattention):
     def build_model(self, args):
@@ -493,6 +591,96 @@ class GPT2Flat_masked(GPT2Flat_fullattention):
         # emb = self.embeddings.quant_emb.emb[0].weight
         # assert self.head.head[0].weight[0, 0] == emb[0, 0]
         return super().forward(*args, **kwargs)
+
+    def generate2_(self, dataset):
+        '''
+        GPT2Flat_masked can generate much faster all channels in parallel.
+        '''
+        self.out_times = 1
+        self.head.out_times = 1
+        self.embeddings.out_times = 1
+        self.use_cache = True
+        channels = self.args.num_channels
+        ex_shift = self.args.example_shift
+        inp_len = self.args.sample_rate
+        gen_shift = self.args.generate_shift
+        gen_len = self.args.generate_length
+
+        xtrain = dataset.x_train_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        data = xtrain[0, :channels, :-gen_shift].clone()
+        zeros = torch.zeros((channels, gen_len), dtype=torch.int16)
+        data = torch.cat((data, zeros.to(data.device)), dim=1)
+
+        # select half of label timeseries from each batch
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        cond = cond[:data.shape[1]]
+
+        # save cond to result_dir for later
+        np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                cond.cpu().numpy())
+        cond.unsqueeze_(0).unsqueeze_(0)
+        data.unsqueeze_(0)
+
+        print(data.shape)
+        print(cond.shape)
+
+        for chunk in range(0, data.shape[2]-inp_len, gen_shift):
+            end_ind = chunk+inp_len-gen_shift
+            inputs = data[:, :, chunk:end_ind]
+            cond_ex = cond[:, :, chunk:end_ind]
+
+            past_kv = None
+            for t in range(gen_shift):
+                inputs, cond_ex, past_kv = self.generate_channels(
+                    data, cond, inputs, cond_ex, past_kv, chunk, t)
+
+            # print progress in percent
+            if chunk % 100 == 0:
+                percent = chunk/data.shape[2]*100
+                print('Progress: {:.2f}%'.format(percent), flush=True)
+
+        data = data[0, :, :].cpu().numpy()
+        name = 'generated.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+        # decode to raw data
+        data = dataset.reconstruct(data)
+        name = 'generated_decoded.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+    def generate_channels(
+            self, data, cond, inputs, cond_ex, past_kv, chunk, t):
+        end_ind = chunk+inp_len-gen_shift
+        logits, past_kv = self.forward({'inputs': inputs,
+                                        'condition': cond_ex,
+                                        'past_key_values': past_kv})
+        logits = logits.detach()
+        inputs = sample(self.args, logits)
+
+        data[:, :, end_ind+t:end_ind+t+1] = inputs
+        cond_ex = cond[:, :, end_ind+t:end_ind+t+1]
+
+        self.set_tid(end_ind+t-chunk)
+
+        if t < gen_shift - 1:
+            # add separator token
+            sep_ids = torch.zeros(1, 1, dtype=torch.int32)
+            sep_ids = sep_ids.to(data.device)
+            sep_emb = self.embeddings.sep_emb(sep_ids)
+
+            out = self.gpt2(inputs_embeds=sep_emb,
+                            past_key_values=past_kv,
+                            use_cache=True)
+            past_kv = out.past_key_values
+
+            self.set_chid_head(0)
+            out = out[0].detach()
+            out = self.reshape_output(self.head(out))
+            inputs = sample(self.args, out)
+
+        self.set_tid(None)
 
 
 class GPT2Model_masked(GPT2Model):

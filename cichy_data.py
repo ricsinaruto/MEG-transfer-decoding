@@ -1196,7 +1196,8 @@ class CichyQuantized(MRCData):
         Create examples from the continuous data (x).
         '''
         sr = self.args.sample_rate
-        inds = np.arange(x.shape[2] - sr)[::self.args.example_shift]
+        shift = sr - self.args.example_shift
+        inds = np.arange(x.shape[2] - sr)[::shift]
 
         x = [x[:, :, ind:ind+sr] for ind in inds]
         x = np.concatenate(x)
