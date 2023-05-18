@@ -250,6 +250,10 @@ class CichyData(MRCData):
 
             # choose first 306 channels
             dataset = dataset.transpose(0, 1, 3, 2)
+            if hasattr(args, 'flip_axes'):
+                if args.flip_axes:
+                    dataset = dataset.transpose(0, 1, 3, 2)
+
             dataset = dataset[:, :, args.num_channels, :]
             self.timesteps = dataset.shape[3]
 
@@ -1090,8 +1094,17 @@ class CichyQuantized(MRCData):
         '''
         Decode data by applying the inverse of mulaw and encoding functions.
         '''
+        device = x.device
+
         x = mulaw_inv(x)
-        x = self.maxabs.inverse_transform(x.T).T
+
+        # reshape x from (B, C, T) to (B*T, C)
+        x = x.permute(0, 2, 1).contiguous().view(-1, x.shape[1])
+        x = x.cpu().detach().numpy()
+
+        x = self.maxabs.inverse_transform(x)
+
+        x = torch.from_numpy(x).to(device)
 
         return x
 

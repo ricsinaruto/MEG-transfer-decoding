@@ -426,6 +426,7 @@ class WavenetFull(WavenetSimple):
 
     def metrics(self, logits, targets):
         targets = targets[:, :, -logits.shape[-2]:]
+        shape = targets.shape
 
         targets = targets.reshape(-1).long()
         logits = logits.reshape(-1, logits.shape[-1])
@@ -438,6 +439,9 @@ class WavenetFull(WavenetSimple):
 
         # compute top-5 accuracy
         top5_acc = topk_accuracy(logits, targets, k=5)
+
+        preds = preds.reshape(shape)
+        targets = targets.reshape(shape)
 
         return (loss, acc, top5_acc, preds, targets)
 
@@ -460,8 +464,12 @@ class WavenetFull(WavenetSimple):
         return losses, logits, past_kv
 
     def compute_mse(self, preds, targets, losses):
-        pred_cont = mulaw_inv(preds)
-        target_cont = mulaw_inv(targets)
+        if getattr(self, 'ds', None):
+            pred_cont = self.ds.decode(preds)
+            target_cont = self.ds.decode(targets)
+        else:
+            pred_cont = mulaw_inv(preds)
+            target_cont = mulaw_inv(targets)
 
         # compute MSE
         mse = self.mse_loss(pred_cont, target_cont)

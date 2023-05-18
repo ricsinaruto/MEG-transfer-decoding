@@ -9,7 +9,7 @@ from cichy_data import CichyProductQuantized
 
 class Args:
     gpu = '1'  # cuda gpu index
-    func = {'generate': True}  # dict of functions to run from training.py
+    func = {'train': True}  # dict of functions to run from training.py
 
     def __init__(self):
         n = 1  # can be used to do multiple runs, e.g. over subjects
@@ -22,9 +22,10 @@ class Args:
         self.learning_rate = 0.0001  # learning rate for Adam
         self.max_trials = 1.0  # ratio of training data (1=max)
         self.val_max_trials = False
-        self.amp = False
+        self.amp = True
+        self.recursive_loss = True
         self.batch_size = 1  # batch size for training and validation data
-        self.epochs = 1000  # number of loops over training data
+        self.epochs = 0  # number of loops over training data
         self.val_freq = 2  # how often to validate (in epochs)
         self.print_freq = 1  # how often to print metrics (in epochs)
         self.anneal_lr = False  # whether to anneal learning rate
@@ -54,7 +55,7 @@ class Args:
             'subj1',
             'cont_quantized',
             'GPT2Flat_fullattention',
-            'gen360_shift1')]
+            'recursive_loss_test')]
         self.model = GPT2Flat_fullattention  # class of model to use
         self.dataset = CichyProductQuantized  # dataset class for loading and handling data
 
@@ -156,12 +157,12 @@ class Args:
         self.halfwin = 5  # half window size for temporal PFI
         self.halfwin_uneven = False  # whether to use even or uneven window
         self.generate_noise = 1  # noise used for wavenet generation
-        self.generate_length = self.sr_data * 1  # generated timeseries len
+        self.generate_length = self.sr_data * 360  # generated timeseries len
         self.generate_mode = 'recursive'  # IIR or FIR mode for wavenet generation
         self.generate_input = 'data'  # input type for generation
-        self.generate_sampling = 'top-p'
-        self.generate_shift = 1
-        self.top_p = 0.8
+        self.generate_sampling = 'argmax'
+        self.generate_shift = 120
+        self.top_p = 0.95
         self.individual = True  # whether to analyse individual kernels
         self.anal_lr = 0.001  # learning rate for input backpropagation
         self.anal_epochs = 200  # number of epochs for input backpropagation

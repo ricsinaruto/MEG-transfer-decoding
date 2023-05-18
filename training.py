@@ -224,7 +224,7 @@ class Experiment:
             self.testing(model)
 
         elif self.gpu_id == 0:
-            self.save_epoch_model(epoch)
+            self.save_epoch_model()
 
         if self.args.save_curves:
             self.save_curves()
@@ -279,6 +279,9 @@ class Experiment:
         self.loss.dict = {}
         model.eval()
 
+        if getattr(self.args, 'recursive_loss', None):
+            self.model.ds = self.dataset
+
         # loop over test batches
         for i in range(num_batches):
             batch, sid = batch_func(i)
@@ -310,6 +313,9 @@ class Experiment:
 
         with open(path, 'w') as f:
             f.write(str(losses))
+
+        if getattr(self.args, 'recursive_loss', None):
+            self.model.ds = None
 
         return losses
 
@@ -350,7 +356,7 @@ class Experiment:
         '''
         losses = self.eval_batch_iter(model,
                                       self.dataset.val_batches,
-                                      self.dataset.get_test_batch,
+                                      self.dataset.get_val_batch,
                                       'val')
         return losses
 

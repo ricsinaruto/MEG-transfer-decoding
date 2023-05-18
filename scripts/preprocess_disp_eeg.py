@@ -6,8 +6,8 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/RC/reading_only"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/RC/reading_only/preproc25hz_eeg"
+dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/reading_only_meeg/ryan"
+outdir = "/gpfs2/well/woolrich/projects/disp_csaky/reading_only_meeg/ryan/sub_preproc25hz"
 
 osl_outdir = os.path.join(outdir, 'oslpy')
 report_dir = os.path.join(osl_outdir, 'report')
@@ -24,17 +24,17 @@ meta:
         words/toilet: 5
         words/pain: 6
 preproc:
-  - filter:         {l_freq: 0.1, h_freq: 40}
-  - notch_filter:   {freqs: 50 100}
+  - filter:         {l_freq: 1, h_freq: 25, method: 'iir', iir_params: {order: 5, ftype: butter}}
+  - resample:       {sfreq: 100}
   - bad_channels:   {picks: 'mag'}
   - bad_channels:   {picks: 'grad'}
   - bad_segments:   {segment_len: 800, picks: 'mag'}
   - bad_segments:   {segment_len: 800, picks: 'grad'}
   - ica_raw:        {picks: 'meg', n_components: 64}
-  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
-  - find_events:    {min_duration: 0.002}
+  - ica_autoreject: {picks: 'meg', ecgmethod: 'correlation'}
+  - find_events:    {min_duration: 0.002, shortest_event: 1}
 """
-
+'''
 config_text = """
 meta:
     event_codes:
@@ -45,26 +45,28 @@ meta:
         words/pain: 6
 preproc:
   - filter:         {l_freq: 1, h_freq: 25, method: 'iir', iir_params: {order: 5, ftype: butter}}
+  - resample:       {sfreq: 100}
   - bad_channels:   {picks: 'eeg'}
   - bad_segments:   {segment_len: 800, picks: 'eeg'}
   - ica_raw:        {picks: 'eeg', n_components: 32}
-  - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
-  - find_events:    {min_duration: 0.002}
+  - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation'}
+  - find_events:    {min_duration: 0.002, shortest_event: 1}
 """
+'''
 
 config_report = """
 meta:
   event_codes:
 preproc:
   - ica_raw:        {picks: 'eeg', n_components: 32}
-  - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation', measure: 'correlation', threshold: 0.5}
+  - ica_autoreject: {picks: 'eeg', ecgmethod: 'correlation'}
   - ica_raw:        {picks: 'meg', n_components: 64}
 """
 
 drop_log = open(os.path.join(outdir, 'drop_log.txt'), 'w')
 files = os.listdir(dataset_path)
 #files = [f for f in files if 'mc.fif' in f]
-files = [os.path.join(dataset_path, f'task_part{i}_rc_raw_tsss_mc.fif') for i in range(1, 3)]
+files = [os.path.join(dataset_path, f'task_part{i}_rh_raw_tsss_mc.fif') for i in range(1, 4)]
 raws = []
 for f in files:
     raws.append(mne.io.read_raw_fif(os.path.join(dataset_path, f), preload=False))
@@ -89,13 +91,11 @@ epochs = mne.Epochs(raw,
                     tmin=-0.1,
                     tmax=1.6,
                     baseline=None,
-                    picks=['eeg'],
+                    picks=['meg'],
                     reject=None,
                     preload=True)
 
 print(epochs.ch_names)
-
-#print(epochs.ch_names)
 
 for reason in epochs.drop_log:
     if reason:
@@ -105,16 +105,11 @@ for reason in epochs.drop_log:
 
 drop_log.close()
 
-
-#scaler = mne.decoding.Scaler(scalings='mean')
-#scaler.fit(epochs.get_data())
 for epoch, event in zip(epochs, epochs.events):
     data = epoch.astype(np.float32)
-    #data = data.reshape(1, data.shape[0], -1)
-    #data = scaler.transform(data).reshape(data.shape[1], -1).T
 
     event_id = event[-1]
     os.makedirs(f"{outdir}/cond{event_id-2}", exist_ok=True)
     n_trials = int(len(os.listdir(f"{outdir}/cond{event_id-2}")))
-    np.save(f"{outdir}/cond{event_id-2}/trial{n_trials}.npy", data)
-    #savemat(f"{outdir}/cond{event_id-2}/trial{n_trials}.mat", {'X': data})
+    if n_trials < 205:
+        np.save(f"{outdir}/cond{event_id-2}/trial{n_trials}.npy", data)

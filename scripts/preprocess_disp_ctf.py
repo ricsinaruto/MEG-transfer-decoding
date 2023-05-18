@@ -6,8 +6,8 @@ import yaml
 from scipy.io import savemat
 
 
-dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/CTF/rich/16253003_reading_single_trial.ds"
-outdir = "/gpfs2/well/woolrich/projects/disp_csaky/CTF/rich/sub_preproc25hz"
+dataset_path = "/gpfs2/well/woolrich/projects/disp_csaky/CTF/11766/11766_Lukas_20230511_reading-f.ds"
+outdir = "/gpfs2/well/woolrich/projects/disp_csaky/CTF/11766/sub_preproc25hz"
 
 osl_outdir = os.path.join(outdir, 'oslpy')
 report_dir = os.path.join(osl_outdir, 'report')
@@ -37,11 +37,16 @@ preproc:
   - ica_autoreject: {picks: 'mag', ecgmethod: 'correlation'}
 """
 
-#config = yaml.load(config_text, Loader=yaml.FullLoader)
-#dataset = osl.preprocessing.run_proc_chain(config, dataset_path, outdir=osl_outdir, overwrite=True, gen_report=True)
+config = yaml.load(config_text, Loader=yaml.FullLoader)
+dataset = osl.preprocessing.run_proc_chain(config,
+                                           dataset_path,
+                                           outdir=osl_outdir,
+                                           overwrite=True,
+                                           gen_report=True)
 
+raw = dataset['raw']
 # load preproc data directly from oslpy output
-raw = mne.io.read_raw_fif(os.path.join(osl_outdir, '16253003_reading_single_trial', '16253003_reading_single_trial_preproc_raw.fif'))
+#raw = mne.io.read_raw_fif(os.path.join(osl_outdir, '13703054_Lukas_20230511_reading-f', '13703054_Lukas_20230511_reading-f_preproc_raw.fif'))
 
 # drop bad channels
 print(raw.info['bads'])
