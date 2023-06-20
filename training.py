@@ -165,7 +165,7 @@ class Experiment:
 
                 # find the optimization loss
                 optkey = [key for key in losses if 'optloss' in key]
-                scaler.scale(optkey[0]).backward()
+                scaler.scale(losses[optkey[0]]).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -223,15 +223,15 @@ class Experiment:
 
             self.testing(model)
 
-        elif self.gpu_id == 0:
-            self.save_epoch_model(epoch)
+        if self.gpu_id == 0:
+            self.save_epoch_model()
 
         if self.args.save_curves:
             self.save_curves()
 
         return best_val
 
-    def save_epoch_model(self, epoch):
+    def save_epoch_model(self):
         path = self.model_path.strip('.pt') + '_epoch.pt'
         torch.save(self.model, path, pickle_protocol=4)
 
@@ -258,8 +258,8 @@ class Experiment:
         self.evaluate(model)
 
         for epoch in range(self.args.epochs):
-            if epoch == 0 and self.gpu_id == 0:
-                self.save_initial_model()
+            # if epoch == 0 and self.gpu_id == 0:
+            #     self.save_initial_model()
 
             self.train_epoch(model, optimizer, scaler, scheduler)
 
@@ -278,6 +278,9 @@ class Experiment:
     def eval_batch_iter(self, model, num_batches, batch_func, split):
         self.loss.dict = {}
         model.eval()
+
+        if getattr(self.args, 'recursive_loss', None):
+            self.model.ds = self.dataset
 
         # loop over test batches
         for i in range(num_batches):
@@ -310,6 +313,9 @@ class Experiment:
 
         with open(path, 'w') as f:
             f.write(str(losses))
+
+        if getattr(self.args, 'recursive_loss', None):
+            self.model.ds = None
 
         return losses
 
@@ -350,7 +356,7 @@ class Experiment:
         '''
         losses = self.eval_batch_iter(model,
                                       self.dataset.val_batches,
-                                      self.dataset.get_test_batch,
+                                      self.dataset.get_val_batch,
                                       'val')
         return losses
 
@@ -583,7 +589,7 @@ class Experiment:
                     pickle.dump(self.model, file)
 
             # re-initialize model
-            if reinit:
+            if reinit and i < times-hw:
                 self.model.init_model()
 
         if filewrite:
@@ -1112,6 +1118,9 @@ class Experiment:
             dataset = self.dataset.x_train_t
 
         hw = self.args.halfwin
+        if hasattr(self.args, 'PFI_halfwin'):
+            hw = self.args.PFI_halfwin
+
         val_t = dataset.clone()
         shuffled_val_t = dataset.clone()
         chn = val_t.shape[1] - 1
@@ -1441,6 +1450,8 @@ class Experiment:
             else:
                 opm_inds.append(np.array([i*3-1, i*3, i*3+1]))
 
+        #eeg_inds = list(range(self.args.num_channels))
+
         multi = self.args.chn_multi
         dataset = self.dataset.x_val_t
         if not self.args.PFI_val:
@@ -1493,8 +1504,8 @@ class Experiment:
                     else:
                         chn_idx = a
 
-                    if 'opm' in self.args.data_path:
-                        chn_idx = opm_inds[i]
+                    #if 'opm' in self.args.data_path:
+                    #    chn_idx = opm_inds[i]
 
                     # shuffle closest k channels
                     if self.args.PFI_inverse:
@@ -1785,6 +1796,9 @@ class Experiment:
         if self.args.subjects > 0 and self.args.embedding_dim > 0:
             self.model.save_embeddings()
 
+        if getattr(self.args, 'channel_emb', None):
+            self.model.save_chn_embeddings()
+
 
 def main(Args, gpu_id=None):
     '''
@@ -1822,6 +1836,16 @@ def main(Args, gpu_id=None):
         args_pass.generate_length = checklist(args.generate_length, i)
         args_pass.sr_data = checklist(args.sr_data, i)
         args_pass.generate_noise = checklist(args.generate_noise, i)
+        args_pass.subjects = checklist(args.subjects, i)
+        args_pass.original_sr = checklist(args.original_sr, i)
+        args_pass.closest_chs = checklist(args.closest_chs, i)
+        args_pass.batch_size = checklist(args.batch_size, i)
+
+        if not hasattr(args_pass, 'example_shift'):
+            args_pass.example_shift = args_pass.rf
+
+        if hasattr(args, 'flip_axes'):
+            args_pass.flip_axes = checklist(args.flip_axes, i)
 
         if isinstance(args.num_channels[0], list):
             args_pass.num_channels = args.num_channels[i]
@@ -1929,7 +1953,7 @@ def main(Args, gpu_id=None):
             if Args.func.get('compare_layers'):
                 e.compare_layers()
             if Args.func.get('test'):
-                e.test()
+                e.testing(e.model)
             if Args.func.get('LDA_eval'):
                 e.lda_eval()
             if Args.func.get('lda_eval_train'):

@@ -57,6 +57,7 @@ class Args:
         self.timesteps = 1  # how many timesteps in the future to forecast
         self.sample_rate = [0, 256]  # start and end of timesteps within trials
         self.rf = 128  # receptive field of wavenet, 2*rf - 1
+        self.example_shift = 128
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
@@ -139,6 +140,7 @@ class Args:
         self.generate_mode = 'recursive'  # IIR or FIR mode for wavenet generation
         self.generate_input = 'data'  # input type for generation
         self.generate_sampling = 'top-p'
+        self.generate_shift = 1
         self.top_p = 0.8
         self.individual = True  # whether to analyse individual kernels
         self.anal_lr = 0.001  # learning rate for input backpropagation

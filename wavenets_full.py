@@ -182,6 +182,48 @@ class WavenetLayer(Module):
 
         # need to keep only second half of skips
         return out, skip[:, :, -self.shift:]
+    
+
+class WavenetLayerLinear(WavenetLayer):
+    def forward(self, x, c, causal_pad=False):
+        """Compute residual and skip output from inputs x.
+        Args:
+            x: (B,C,T) tensor where C is the number of residual channels
+                when `in_channels` was specified the number of input channels
+            c: optional tensor containing a global (B,C,1) or local (B,C,T)
+                condition, where C is the number of condition channels.
+            causal_pad: layer performs causal padding when set to True, otherwise
+                assumes the input is already properly padded.
+        Returns
+            r: (B,C,T) tensor where C is the number of residual channels
+            skip: (B,C,T) tensor where C is the number of skip channels
+        """
+        p = (self.causal_left_pad, 0) if causal_pad else (0, 0)
+        x_dilated = self.conv_dilation(F.pad(x, p))
+
+        if self.cond_channels:
+            assert c is not None, "conditioning required"
+            x_cond = self.conv_cond(c[:, :, -x_dilated.shape[-1]:])
+            x_dilated = x_dilated + x_cond
+        x_filter = x_dilated[:, :self.dilation_channels]
+        x_gate = x_dilated[:, self.dilation_channels:]
+        x_h = x_gate + x_filter
+        skip = self.conv_skip(x_h)
+        res = self.conv_res(x_h)
+
+        if self.conv_input is not None:
+            x = self.conv_input(x)  # convert to res channels
+
+        if causal_pad:
+            out = x + res
+        else:
+            out = x[..., -res.shape[-1]:] + res
+
+        # dropout
+        out = self.dropout(out)
+
+        # need to keep only second half of skips
+        return out, skip[:, :, -self.shift:]
 
 
 class WaveNetLogitsHead(Module):
@@ -233,6 +275,50 @@ class WaveNetLogitsHead(Module):
             logits: (B,Q,T) tensor of logits, where Q is the number of output
             channels.
         """
+        del encoded
+        return self.transform(sum(skips))
+    
+
+class WaveNetLogitsHeadLinear(Module):
+    def __init__(
+        self,
+        skip_channels,
+        residual_channels,
+        head_channels,
+        out_channels,
+        bias=True,
+        dropout=0.0
+    ):
+        """Collates skip results and transforms them to logit predictions.
+        Args:
+            skip_channels: number of skip channels
+            residual_channels: number of residual channels
+            head_channels: number of hidden channels to compute result
+            out_channels: number of output channels
+            bias: When true, convolutions use a bias term.
+        """
+        del residual_channels
+        super().__init__()
+        self.transform = torch.nn.Sequential(
+            torch.nn.Dropout1d(p=dropout),
+            torch.nn.Identity(),  # note, we perform non-lin first (i.e on sum of skips) # noqa:E501
+            torch.nn.Conv1d(
+                skip_channels,
+                head_channels,
+                kernel_size=1,
+                bias=bias,
+            ),  # enlarge and squeeze (not based on paper)
+            torch.nn.Dropout1d(p=dropout),
+            torch.nn.Identity(),
+            torch.nn.Conv1d(
+                head_channels,
+                out_channels,
+                kernel_size=1,
+                bias=bias,
+            ),  # logits
+        )
+
+    def forward(self, encoded, skips):
         del encoded
         return self.transform(sum(skips))
 
@@ -414,15 +500,20 @@ class WavenetFull(WavenetSimple):
 
         return all_losses, None, None
 
-    def loss_(self, data, i=0, sid=None, train=True, criterion=None):
-        logits = self.forward(data)
-        past_kv = None
-        if isinstance(logits, tuple):
-            logits, past_kv = logits
+    def pack_loss(self, loss, acc, top5_acc):
+        losses = {'trainloss/optloss/Training loss: ': loss,
+                  'valloss/valcriterion/Validation loss: ': loss,
+                  'valloss/saveloss/none': loss,
+                  'valloss/Validation accuracy: ': acc,
+                  'trainloss/Train accuracy: ': acc,
+                  'valloss/Validation top-5 accuracy: ': top5_acc,
+                  'trainloss/Train top-5 accuracy: ': top5_acc}
+        return losses
 
-        targets = data['targets'][:, :, -logits.shape[-2]:]
-
+    def metrics(self, logits, targets):
+        targets = targets[:, :, -logits.shape[-2]:]
         shape = targets.shape
+
         targets = targets.reshape(-1).long()
         logits = logits.reshape(-1, logits.shape[-1])
 
@@ -435,25 +526,38 @@ class WavenetFull(WavenetSimple):
         # compute top-5 accuracy
         top5_acc = topk_accuracy(logits, targets, k=5)
 
-        losses = {'trainloss/optloss/Training loss: ': loss,
-                  'valloss/valcriterion/Validation loss: ': loss,
-                  'valloss/saveloss/none': loss,
-                  'valloss/Validation accuracy: ': acc,
-                  'trainloss/Train accuracy: ': acc,
-                  'valloss/Validation top-5 accuracy: ': top5_acc,
-                  'trainloss/Train top-5 accuracy: ': top5_acc}
+        preds = preds.reshape(shape)
+        targets = targets.reshape(shape)
+
+        return (loss, acc, top5_acc, preds, targets)
+
+    def loss_(self, data, i=0, sid=None, train=True, criterion=None):
+        logits = self.forward(data)
+        past_kv = None
+        if isinstance(logits, tuple):
+            logits, past_kv = logits
+
+        loss, acc, top5_acc, preds, targets = self.metrics(logits,
+                                                           data['targets'])
+        losses = self.pack_loss(loss, acc, top5_acc)
 
         if self.args.gpt2_config.vocab_size < 500:
             losses, pred, target = self.compute_mse(preds, targets, losses)
 
         if self.save_preds and False:
+            ce_loss = None
+            shape = None
             self.save_outputs(pred, target, ce_loss, shape, train=train, i=i)
 
         return losses, logits, past_kv
 
     def compute_mse(self, preds, targets, losses):
-        pred_cont = mulaw_inv(preds)
-        target_cont = mulaw_inv(targets)
+        if getattr(self, 'ds', None):
+            pred_cont = self.ds.decode(preds)
+            target_cont = self.ds.decode(targets)
+        else:
+            pred_cont = mulaw_inv(preds)
+            target_cont = mulaw_inv(targets)
 
         # compute MSE
         mse = self.mse_loss(pred_cont, target_cont)
@@ -505,6 +609,8 @@ class WavenetFull(WavenetSimple):
         channels = self.args.num_channels
         shift = self.args.rf
         gen_len = self.args.generate_length
+
+        train = train.x_train_t
 
         output = torch.zeros((channels, gen_len)).cuda()
 
@@ -575,27 +681,13 @@ class WavenetFull(WavenetSimple):
         print(data.shape)
         print(cond.shape)
 
-        past_key_values = None
         # recursively generate using the previously defined input
         for t in range(shift, data.shape[1]):
             inputs = data[:, t-shift:t].reshape(1, channels, -1)
             cond_ex = cond[:, :, t-shift:t]
-            if past_key_values is not None:
-                # only need to keep the last timestep of inputs
-                inputs = inputs[:, :, -1:]
-                cond_ex = cond_ex[:, :, -1:]
 
             out = self.forward({'inputs': inputs,
-                                'condition': cond_ex,
-                                'past_key_values': past_key_values})
-
-            # check if out is a tuple
-            if isinstance(out, tuple):
-                out, past_key_values = out
-                past_key_values = tuple(
-                    (key[:, :, 1:].detach(), value[:, :, 1:].detach())
-                    for (key, value) in past_key_values
-                )
+                                'condition': cond_ex})
 
             out = sample(self.args, out).reshape(-1)
 
@@ -1087,6 +1179,72 @@ class WavenetFullChannel(WavenetFullTest):
         out = out.permute(0, 1, 3, 2)
 
         return out
+
+
+class WavenetFullChannelLinear(WavenetFullChannel):
+    def build_model(self, args):
+        self.quant_levels = args.mu + 1
+        shift = args.sample_rate - args.rf + 1
+        self.save_preds = False
+
+        # embeddings for various conditioning
+        self.cond_emb = Embedding(args.num_classes, args.class_emb)
+
+        # 306 quantazation embedding layers
+        self.quant_emb = torch.randn(
+            size=(args.num_channels, self.quant_levels, args.quant_emb),
+            dtype=torch.float32,
+            requires_grad=True,
+            device='cuda')
+        self.quant_emb = torch.nn.Parameter(self.quant_emb)
+
+        self.softmax = Softmax(dim=-1)
+
+        # initial convolution
+        layers = [
+            WavenetLayerLinear(
+                shift=shift,
+                kernel_size=1,
+                dilation=1,
+                in_channels=args.quant_emb,
+                residual_channels=args.residual_channels,
+                dilation_channels=args.dilation_channels,
+                skip_channels=args.skip_channels,
+                cond_channels=args.cond_channels,
+                bias=True,
+                dropout=args.p_drop
+            )
+        ]
+
+        layers += [
+            WavenetLayerLinear(
+                shift=shift,
+                kernel_size=args.kernel_size,
+                dilation=d,
+                residual_channels=args.residual_channels,
+                dilation_channels=args.dilation_channels,
+                skip_channels=args.skip_channels,
+                cond_channels=args.cond_channels,
+                bias=args.conv_bias,
+                dropout=args.p_drop
+            )
+            for d in args.dilations
+        ]
+
+        self.layers = torch.nn.ModuleList(layers)
+
+        self.conditioning_channels = args.cond_channels
+        
+        self.logits = WaveNetLogitsHeadLinear(
+            skip_channels=args.skip_channels,
+            residual_channels=args.residual_channels,
+            head_channels=args.head_channels,
+            out_channels=self.quant_levels,
+            bias=True,
+            dropout=args.p_drop
+        )
+
+        self.apply(wave_init_weights)
 
 
 class WavenetFullChannelMix(WavenetFullChannel):

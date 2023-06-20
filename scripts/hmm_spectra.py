@@ -17,11 +17,12 @@ from osl_dynamics.models import load
 
 
 def power_spectra(path):
-    alp = pickle.load(open(os.path.join(path, 'inf_params', 'alp.pkl'), 'rb'))
+    alp = pickle.load(open(os.path.join(path, 'inf_params', 'alp_gpt.pkl'), 'rb'))
 
     # Compute spectra
     # Load data
-    data = Data(os.path.join(path, 'subject01.npy'))
+    #data = Data(os.path.join(path, 'subject01.npy'))
+    data = Data(os.path.join('..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'gpt2_100hz', 'subject01.npy'))
     data = data.trim_time_series(2000, 15)
 
     # load model
@@ -31,17 +32,17 @@ def power_spectra(path):
     print(alp.shape)
 
     f, psd, coh = spectral.multitaper_spectra(data=data,
-                                                alpha=alp,
-                                                sampling_frequency=100,
-                                                time_half_bandwidth=4,
-                                                n_tapers=7,
-                                                frequency_range=[1, 50],
-                                                n_jobs=10)
+                                            alpha=alp,
+                                            sampling_frequency=100,
+                                            time_half_bandwidth=4,
+                                            n_tapers=7,
+                                            frequency_range=[1, 50],
+                                            n_jobs=10)
 
     # Save spectra
-    os.makedirs(os.path.join(path, 'spectra'), exist_ok=True)
-    np.save(os.path.join(path, 'spectra', 'f.npy'), f)
-    np.save(os.path.join(path, 'spectra', 'psd.npy'), psd)
+    os.makedirs(os.path.join(path, 'spectra_gpt'), exist_ok=True)
+    np.save(os.path.join(path, 'spectra_gpt', 'f.npy'), f)
+    np.save(os.path.join(path, 'spectra_gpt', 'psd.npy'), psd)
 
 
 path = os.path.join(

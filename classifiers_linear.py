@@ -8,6 +8,8 @@ import traceback
 from mne.time_frequency import tfr_array_morlet
 
 from hyperopt import STATUS_OK, Trials, fmin, hp, tpe
+from scipy.signal import welch
+from sklearn.feature_selection import SelectKBest, f_classif
 
 from pyriemann.estimation import XdawnCovariances, ERPCovariances
 from pyriemann.tangentspace import TangentSpace
@@ -80,7 +82,7 @@ class LDA:
         self.lda_norm = True
 
         self.load_whiten(args)
-        
+
     def run(self, x_train, x_val_, window=None, sid_val=None, sid_train=None):
         '''
         Transform data, then train and evaluate LDA.
@@ -804,7 +806,7 @@ class LDA_average_trials(LDA):
         data = np.mean(data, axis=1)
 
         if self.window is not None:
-            data = data[:, self.window[0]:self.window[1], :]
+            data = data[:, 80:350, :]
 
         print(data.shape)
         data = data.reshape(data.shape[0], -1)
@@ -855,7 +857,10 @@ class LDA_riemann(LDA):
     def __init__(self, args):
         super(LDA_riemann, self).__init__(args)
         #self.cov = ERPCovariances(estimator='lwf')
-        self.cov = XdawnCovariances(nfilter=2)
+        self.cov = XdawnCovariances(
+            nfilter=args.xdawn_filters,
+            classes=list(range(args.num_classes)),
+            estimator='oas')
         self.tangent = TangentSpace(metric="riemann")
 
     def prep_lda(self, data, sid=None):
@@ -897,7 +902,7 @@ class LDA_riemann(LDA):
 
         return x_train, x_val, y_train, y_val
 
-    def eval(self, x_val, window=None):
+    def eval(self, x_val, window=None, sid=None):
         '''
         Evaluate an already trained LDA model.
         '''
@@ -907,6 +912,84 @@ class LDA_riemann(LDA):
         x_val = self.prep_lda(x_val)
         x_val = self.cov.transform(x_val)
         x_val = self.tangent.transform(x_val)
+
+        return self.model.score(x_val, y_val), x_val, y_val
+
+
+class LDA_avg_riemann(LDA_riemann):
+    def prep_lda(self, data, sid=None):
+        '''
+        Reshape data for LDA.
+        '''
+        data = data.reshape(-1, self.ts, data.shape[1])
+        print(data.shape)
+        data = data.reshape(data.shape[0], 4, -1, data.shape[2])
+        data = np.mean(data, axis=1)
+
+        data = data[:, 80:350, :]
+        print(data.shape)
+
+        data = data.transpose(0, 2, 1)
+
+        return data
+
+
+class LDA_BCI(LDA):
+    def compute_power(self, data, fs, band):
+        freqs, psd = welch(data, fs)
+        psd = psd[:, :, np.logical_and(freqs >= band[0], freqs <= band[1])]
+        return np.sum(psd, axis=-1)
+
+    def feature_extraction(self, data, fs):
+        bands = {'alpha': [8, 12], 'beta': [12, 30], 'gamma': [30, 100]}
+        features = []
+        halfwin = data.shape[-1] // 2
+        for band_name, band_range in bands.items():
+            for window in [0, halfwin]:
+                power = self.compute_power(
+                    data[:, :, window:window+halfwin], fs, band_range)
+                features.append(power)
+        return np.concatenate(features, axis=-1)
+
+    def prep_lda(self, data, sid=None):
+        data = data.reshape(-1, self.ts, data.shape[1])
+
+        return data.transpose(0, 2, 1)
+
+    def run(self, x_train, x_val_, window=None, sid_val=None, sid_train=None):
+        '''
+        Transform data, then train and evaluate LDA.
+        '''
+        self.window = window
+        self.sid_val = sid_val
+        self.sid_train = sid_train
+        x_train, x_val, y_train, y_val = self.transform_data(x_train, x_val_)
+
+        print(x_train.shape)
+        # extract features
+        features = self.feature_extraction(x_train, self.args.sr_data)
+        self.selector = SelectKBest(f_classif, k=10)
+        x_train = self.selector.fit_transform(features, y_train)
+
+        # fit LDA
+        self.model.fit(x_train, y_train)
+
+        features = self.feature_extraction(x_val, self.args.sr_data)
+        x_val = self.selector.transform(features)
+        # validation accuracy
+        acc = self.model.score(x_val, y_val)
+
+        return acc, None, None
+
+    def eval(self, x_val, window=None, sid=None):
+        '''
+        Evaluate an already trained LDA model.
+        '''
+        self.window = window
+        x_val, y_val = self.prepare(x_val)
+        x_val = self.prep_lda(x_val, sid=sid)
+        features = self.feature_extraction(x_val, self.args.sr_data)
+        x_val = self.selector.transform(features)
 
         return self.model.score(x_val, y_val), x_val, y_val
 

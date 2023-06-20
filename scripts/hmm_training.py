@@ -4,7 +4,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = '1'
 
 from osl_dynamics import run_pipeline
 
-savedir = os.path.join('..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'gpt2_saved_kv_100hz')
+savedir = os.path.join(
+    '..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'gpt2_randomlabel_100hz')
 loaddir = os.path.join(savedir, 'subject01.npy')
 
 config = '''

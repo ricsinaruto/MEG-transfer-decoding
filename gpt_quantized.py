@@ -3,9 +3,11 @@ from torch.nn.parameter import Parameter
 import torch
 import os
 import numpy as np
+import gc
 from scipy.io import savemat
 
-from wavenets_full import WavenetFullChannelMixMixin, sample
+from wavenets_full import WavenetFullChannelMixMixin, sample, accuracy
+from wavenets_simple import topk_accuracy
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block
@@ -34,6 +36,12 @@ class Embeddings(Module):
         self.apply(self.init_weights)
 
     def init_weights(self, module):
+        '''
+        Initialize weights of embedding layers
+
+        Args:
+            module (torch.nn.Module): module to initialize
+        '''
         if isinstance(module, Embedding):
             module.weight.data.normal_(mean=0.0, std=0.02)
 
@@ -65,13 +73,15 @@ class Embeddings(Module):
             semb = self.sub_emb(sid)
             semb = semb.expand(-1, channels, -1, -1)  # B x C x T x E_s
 
-        ch_ids = torch.arange(self.args.num_channels).to(x.device)
+        ch_emb = 0
+        if self.args.channel_emb > 0:
+            ch_ids = torch.arange(self.args.num_channels).to(x.device)
 
-        # get channel embedding: C x E_ch
-        ch_emb = self.ch_emb(ch_ids[ids])
-        # repeat across batch and time:  B x T x C x E_ch
-        ch_emb = ch_emb.expand(1, timesteps, -1, -1)
-        ch_emb = ch_emb.permute(0, 2, 1, 3)  # B x C x T x E_ch
+            # get channel embedding: C x E_ch
+            ch_emb = self.ch_emb(ch_ids[ids])
+            # repeat across batch and time:  B x T x C x E_ch
+            ch_emb = ch_emb.expand(1, timesteps, -1, -1)
+            ch_emb = ch_emb.permute(0, 2, 1, 3)  # B x C x T x E_ch
 
         return self.add_embeds(x, ch_emb, cond_emb, semb)
 
@@ -111,6 +121,8 @@ class GPT2MEG(WavenetFullChannelMixMixin):
 
         # channel dim for model
         self.num_channels = args.num_channels
+
+        # check if args has model_chn_dim and set self.num_channels
         if hasattr(args, 'model_chn_dim'):
             self.num_channels = args.model_chn_dim
 
@@ -125,6 +137,11 @@ class GPT2MEG(WavenetFullChannelMixMixin):
         self.gpt2 = GPT2Model(args.gpt2_config)
         self.embeddings = Embeddings(args, self.num_channels)
         self.head = ChnIndependentHead(args, self.num_channels, self.out_times)
+
+    def save_chn_embeddings(self):
+        # save channel embeddings
+        ch_emb = self.embeddings.ch_emb.weight.data.cpu().numpy()
+        np.save(os.path.join(self.args.result_dir, 'ch_emb.npy'), ch_emb)
 
     def set_shift(self, shift):
         self.out_times = shift
@@ -142,11 +159,184 @@ class GPT2MEG(WavenetFullChannelMixMixin):
         if not hasattr(self, 'use_cache'):
             self.use_cache = False
 
-    def generate(self, train_data):
-        self.out_times = 0
-        self.use_cache = False
+    def generate(self, dataset):
+        if hasattr(self.args, 'model_chn_dim'):
+            self.generate_mem(dataset)
+        self.eval()
+        self.out_times = 1
+        self.head.out_times = 1
+        self.use_cache = True
         self.args.rf = self.args.sample_rate
-        return super().generate(train_data)
+
+        channels = self.args.num_channels
+        ex_shift = self.args.example_shift
+        inp_len = self.args.sample_rate
+        gen_shift = self.args.generate_shift
+        gen_len = self.args.generate_length
+
+        xtrain = dataset.x_train_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        data = xtrain[0, :channels, :-gen_shift].clone()
+        zeros = torch.zeros((channels, gen_len), dtype=torch.int16)
+        data = torch.cat((data.to('cuda'), zeros.to('cuda')), dim=1)
+
+        # select half of label timeseries from each batch
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        cond = cond[:data.shape[1]].to('cuda')
+
+        if self.args.generate_input == 'random_cond':
+            # create conditioning data with shift+gen_len length
+            seconds = gen_len//self.args.sr_data
+            sr = self.args.sr_data
+            cond = [np.zeros((inp_len-gen_shift))]
+            for _ in range(seconds*2):
+                # uniform distribution between 0.2 and 0.8
+                # num_zeros = np.random.randint(int(sr*0.2), int(sr*0.8))
+                num_zeros = int(sr*0.5)
+                cond.append(np.zeros((num_zeros)))
+
+                # choose a class randomly from self.args.num_classes
+                cl = np.random.randint(1, self.args.num_classes)
+
+                # epoch_len = np.random.randint(int(sr*0.2), int(sr*0.8))
+                epoch_len = int(sr*self.args.trial_len)
+                cond.append(np.array([cl]*epoch_len))
+
+            cond = np.concatenate(cond)[:data.shape[1]]
+            cond = torch.Tensor(cond).to(data.device).to(data.dtype)
+
+        # save cond to result_dir for later
+        np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                cond.cpu().numpy())
+        cond.unsqueeze_(0).unsqueeze_(0)
+        data.unsqueeze_(0)
+
+        print(data.shape)
+        print(cond.shape)
+
+        for chunk in range(0, data.shape[2]-inp_len, gen_shift):
+            end_ind = chunk+inp_len-gen_shift
+            inputs = data[:, :, chunk:end_ind]
+            cond_ex = cond[:, :, chunk:end_ind]
+
+            past_kv = None
+            for t in range(gen_shift):
+                logits, past_kv = self.forward({
+                    'inputs': inputs,
+                    'condition': cond_ex,
+                    'sid': torch.zeros_like(cond_ex),
+                    'past_key_values': past_kv})
+
+                logits = logits.detach()
+                inputs = sample(self.args, logits)
+
+                cond_ex = cond[:, :, end_ind+t:end_ind+t+1]
+                data[:, :, end_ind+t:end_ind+t+1] = inputs
+
+            # print progress in percent
+            if chunk % 100 == 0:
+                percent = chunk/data.shape[2]*100
+                print('Progress: {:.2f}%'.format(percent), flush=True)
+
+        data = data[0, :, :].cpu().numpy()
+        name = 'generated.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+    def generate_mem(self, dataset):
+        self.eval()
+        self.out_times = 1
+        self.head.out_times = 1
+        self.use_cache = True
+        self.args.rf = self.args.sample_rate
+        self.num_channels = self.args.model_chn_dim
+
+        channels = self.args.num_channels
+        model_chn = self.args.model_chn_dim
+        ex_shift = self.args.example_shift
+        inp_len = self.args.sample_rate
+        gen_shift = self.args.generate_shift
+        gen_len = self.args.generate_length
+
+        xtrain = dataset.x_train_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        data = xtrain[0, :channels, :-gen_shift].clone()
+        zeros = torch.zeros((channels, gen_len), dtype=torch.int16)
+        data = torch.cat((data.to('cuda'), zeros.to('cuda')), dim=1)
+
+        # select half of label timeseries from each batch
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        cond = cond[:data.shape[1]].to('cuda')
+
+        if self.args.generate_input == 'random_cond':
+            # create conditioning data with shift+gen_len length
+            seconds = gen_len//self.args.sr_data
+            sr = self.args.sr_data
+            cond = [np.zeros((inp_len-gen_shift))]
+            for _ in range(seconds*2):
+                # uniform distribution between 0.2 and 0.8
+                # num_zeros = np.random.randint(int(sr*0.2), int(sr*0.8))
+                num_zeros = int(sr*0.5)
+                cond.append(np.zeros((num_zeros)))
+
+                # choose a class randomly from self.args.num_classes
+                cl = np.random.randint(1, self.args.num_classes)
+
+                # epoch_len = np.random.randint(int(sr*0.2), int(sr*0.8))
+                epoch_len = int(sr*self.args.trial_len)
+                cond.append(np.array([cl]*epoch_len))
+
+            cond = np.concatenate(cond)[:data.shape[1]]
+            cond = torch.Tensor(cond).to(data.device).to(data.dtype)
+
+        # save cond to result_dir for later
+        np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                cond.cpu().numpy())
+        cond.unsqueeze_(0).unsqueeze_(0)
+        data.unsqueeze_(0)
+
+        print(data.shape)
+        print(cond.shape)
+
+        for chunk in range(0, data.shape[2]-inp_len, gen_shift):
+            end_ind = chunk+inp_len-gen_shift
+            inputs = data[:, :, chunk:end_ind].clone()
+            cond_ex = cond[:, :, chunk:end_ind].clone()
+
+            num_loops = channels//model_chn
+            past_kv = [None]*num_loops
+            for t in range(gen_shift):
+                for chn_ind in range(num_loops):
+                    low_chn = chn_ind*model_chn
+                    high_chn = (chn_ind+1)*model_chn
+
+                    torch.cuda.empty_cache()
+                    with torch.no_grad():
+                        logits, past_kv[chn_ind] = self.forward({
+                            'inputs': inputs[:, low_chn:high_chn, :].clone(),
+                            'condition': cond_ex.clone(),
+                            'past_key_values': past_kv[chn_ind],
+                            'ch_ids': np.arange(low_chn, high_chn)})
+
+                    logits = logits.detach()
+                    logits = sample(self.args, logits)
+
+                    data[:, low_chn:high_chn, end_ind+t:end_ind+t+1] = logits.clone()
+                    del logits
+
+                cond_ex = cond[:, :, end_ind+t:end_ind+t+1].clone()
+                inputs = data[:, :, end_ind+t:end_ind+t+1].clone()
+                torch.cuda.empty_cache()
+
+            # print progress in percent
+            if chunk % 100 == 0:
+                percent = chunk/data.shape[2]*100
+                print('Progress: {:.2f}%'.format(percent), flush=True)
+
+        data = data[0, :, :].cpu().numpy()
+        name = 'generated.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
 
     def reshape_output(self, x):
         return x.reshape(-1, self.num_channels, x.shape[1], x.shape[2])
@@ -179,12 +369,14 @@ class GPT2MEG(WavenetFullChannelMixMixin):
 
 
 def create_parameter(shape):
+    # Create a random tensor with the given shape.
     tensor = torch.normal(size=shape,
                           dtype=torch.float32,
                           requires_grad=True,
                           device='cuda',
                           mean=0.0,
                           std=0.02)
+    # Wrap the tensor in a Parameter to enable autograd.
     return Parameter(tensor)
 
 
@@ -254,6 +446,7 @@ class EmbeddingsFlat(Embeddings):
     def __init__(self, args, num_channels):
         super().__init__(args, num_channels)
 
+        # create quantization embedding
         self.quant_emb = ListEmbedding(args)
 
         # create separator embedding
@@ -332,6 +525,10 @@ class GPT2Flat(GPT2MEG):
 
         self.gpt2.wte = None
 
+    def loaded(self, args):
+        super().loaded(args)
+        self.embeddings.out_times = self.out_times
+
     def set_tid(self, tid):
         self.embeddings.tid = tid
 
@@ -367,12 +564,85 @@ class GPT2Flat(GPT2MEG):
 
     def generate(self, dataset):
         self.eval()
+        if hasattr(self.args, 'no_kv_cache'):
+            self.generate_nokv(dataset)
+            return
+
         if self.args.amp:
             with torch.autocast(device_type='cuda',
                                 dtype=torch.float16):
                 self.generate_(dataset)
         else:
             self.generate_(dataset)
+
+    def generate_nokv(self, dataset):
+        '''
+        Same as self.generate_ but without resuing the key/value cache.
+        '''
+        self.eval()
+        self.use_cache = False
+
+        # out_times should be number of channels
+        self.out_times = 1
+        self.head.out_times = 1
+        channels = self.args.num_channels
+        ex_shift = self.args.example_shift
+        inp_len = self.args.sample_rate
+        gen_len = self.args.generate_length
+
+        xtrain = dataset.x_train_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        data = xtrain[0, :channels, :].clone()
+        zeros = torch.zeros((channels, gen_len), dtype=torch.int16)
+        data = torch.cat((data, zeros.to(data.device)), dim=1)
+
+        # select half of label timeseries from each batch
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        cond = cond[:data.shape[1]]
+
+        # save cond to result_dir for later
+        np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                cond.cpu().numpy())
+        cond.unsqueeze_(0).unsqueeze_(0)
+        data.unsqueeze_(0)
+
+        print(data.shape)
+        print(cond.shape)
+
+        for chunk in range(0, data.shape[2]-inp_len):
+            end_ind = chunk+inp_len
+            inputs = data[:, :, chunk:end_ind]
+            cond_ex = cond[:, :, chunk:end_ind]
+
+            for c in range(self.num_channels):
+                logits = self.forward({'inputs': inputs, 'condition': cond_ex})
+
+                # select current channel
+                logits = logits[:, c, -1, :].detach()
+                out = sample(self.args, logits)
+
+                data[:, c, end_ind-1] = out
+                inputs[:, c, -1] = out
+
+            
+            if chunk < 5:
+                print(data[:, :, end_ind-1])
+
+
+            # print progress in percent
+            if chunk % 100 == 0:
+                percent = chunk/data.shape[2]*100
+                print('Progress: {:.2f}%'.format(percent), flush=True)
+
+        data = data[0, :, :].cpu().numpy()
+        name = 'generated.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+        # decode to raw data
+        data = dataset.reconstruct(data)
+        name = 'generated_decoded.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
 
     def generate_(self, dataset):
         '''
@@ -413,10 +683,16 @@ class GPT2Flat(GPT2MEG):
             inputs = data[:, :, chunk:end_ind]
             cond_ex = cond[:, :, chunk:end_ind]
 
+
             self.set_chid_head(0)
             skip = False
-
             past_kv = None
+
+            # Release unused GPU memory and monitor memory usage
+            # torch.cuda.empty_cache()
+            # print("Memory allocated: ", torch.cuda.memory_allocated())
+            # print("Memory cached: ", torch.cuda.memory_reserved())
+
             for t in range(gen_shift):
                 for c in range(self.num_channels+1):
                     if not skip:
@@ -424,8 +700,10 @@ class GPT2Flat(GPT2MEG):
                         logits, past_kv = self.forward({
                             'inputs': inputs,
                             'condition': cond_ex,
+                            'sid': torch.zeros_like(cond_ex),
                             'past_key_values': past_kv}, chid=chid)
                         if logits is not None:
+                            logits = logits.detach()
                             inputs = sample(self.args, logits)
 
                     self.set_tid(end_ind+t-chunk)
@@ -440,7 +718,7 @@ class GPT2Flat(GPT2MEG):
                     elif t < gen_shift - 1:
                         # add separator token
                         sep_ids = torch.zeros(1, 1, dtype=torch.int32)
-                        sep_ids = sep_ids.to(inputs.device)
+                        sep_ids = sep_ids.to(data.device)
                         sep_emb = self.embeddings.sep_emb(sep_ids)
 
                         out = self.gpt2(inputs_embeds=sep_emb,
@@ -449,9 +727,13 @@ class GPT2Flat(GPT2MEG):
                         past_kv = out.past_key_values
 
                         self.set_chid_head(0)
-                        out = self.reshape_output(self.head(out[0]))
+                        out = out[0].detach()
+                        out = self.reshape_output(self.head(out))
                         inputs = sample(self.args, out)
                         skip = True
+
+                # if chunk < 10:
+                #    print(data[:, :, end_ind+t])
 
             self.set_tid(None)
             self.set_chid_embs(None)
@@ -470,6 +752,19 @@ class GPT2Flat(GPT2MEG):
         name = 'generated_decoded.mat'
         savemat(os.path.join(self.args.result_dir, name), {'X': data})
 
+        # check reconstruction of real data
+        xtrain = xtrain[:, :channels, :xtrain.shape[2]//2]
+        xtrain = xtrain.permute(1, 0, 2).reshape(channels, -1)
+        recon = dataset.reconstruct(xtrain.cpu().numpy())
+
+        # save reconstruction to result_dir for later
+        name = 'reconstruction_xtrain.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': recon})
+
+    def crop_kv(self, kv, ind):
+        new_kv = ((lyr[0][:, :, :ind, :], lyr[1][:, :, :ind, :]) for lyr in kv)
+        return tuple(new_kv)
+
 
 class GPT2Flat_fullattention(GPT2Flat):
     def build_model(self, args):
@@ -482,6 +777,101 @@ class GPT2Flat_fullattention(GPT2Flat):
 
         self.gpt2.wte = None
 
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        '''
+        Recursively calculate the loss of a trained model
+        for every channel in the current timestep.
+        '''
+        if not getattr(self.args, 'recursive_loss', None):
+            return self.loss_(data, i, sid, train, criterion)
+
+        sr = self.args.sample_rate
+        shift = self.args.generate_shift
+        num_chn = self.args.num_channels + 1
+        self.out_times = shift
+        self.head.out_times = shift
+        self.embeddings.out_times = None
+        self.use_cache = True
+
+        self.set_tid(None)
+        self.set_chid_embs(None)
+        self.set_chid_head(None)
+
+        inputs = data['inputs']
+        cond = data['condition']
+        out_og, past_kv_og = self.forward({'inputs': inputs,
+                                           'condition': cond,
+                                           'past_key_values': None})
+        out_og = out_og.detach()
+
+        dims = inputs[:, :, -shift:].shape
+        dims = tuple([d for d in dims] + [out_og.shape[-1]])
+        outputs = torch.zeros(dims).to(inputs.device)
+        sampled = torch.zeros(inputs[:, :, -shift:].shape).to(inputs.device)
+        sampled = sampled.to(torch.int32)
+
+
+        # set first channel with out_og
+        outputs[:, :1, :] = out_og[:, :1, :]
+        sampled[:, :1, :] = sample(self.args, out_og[:, :1, :])
+
+        # only predict one timestep
+        self.out_times = 1
+        self.head.out_times = 1
+        self.embeddings.out_times = 1
+
+        for t in range(shift):
+            past_ind = (sr-shift+t) * num_chn + 1
+            past_kv = self.crop_kv(past_kv_og, past_ind)
+
+            inputs = sampled[:, :1, t:t+1]
+            cond_ex = cond[:, :, sr-shift+t:sr-shift+t+1]
+            self.set_tid(sr-shift+t)
+
+            for c in range(self.num_channels-1):
+                self.set_chid_embs(c)
+                self.set_chid_head(c+1)
+
+                logits, past_kv = self.forward({
+                    'inputs': inputs,
+                    'condition': cond_ex,
+                    'past_key_values': past_kv},
+                    chid=np.array([c]))
+
+                logits = logits.detach()
+                inputs = sample(self.args, logits)
+
+                outputs[:, c+1:c+2, t:t+1] = logits
+                sampled[:, c+1:c+2, t:t+1] = inputs
+
+        # outputs = out_og
+        # sampled = sample(self.args, out_og)
+
+        # calculate loss
+        metrics = self.metrics(outputs, data['inputs'])[:3]
+        losses = self.pack_loss(*metrics)
+
+        losses = self.compute_mse(sampled, data['inputs'], losses)
+        return losses, None, None
+
+    def compute_mse(self, outputs, targets, losses):
+        # compute mse of reconstructed data
+        targets = targets[:, :, -outputs.shape[-1]:]
+        targets = targets.reshape(self.args.num_channels, -1)
+        targets = self.ds.reconstruct(targets.cpu().numpy())
+
+        outputs = outputs.reshape(self.args.num_channels, -1)
+        outputs = self.ds.reconstruct(outputs.cpu().numpy())
+
+        # calculate mse
+        mse = self.mse_loss(torch.Tensor(outputs), torch.Tensor(targets))
+        mse = torch.mean(mse)
+
+        losses['trainloss/Training MSE: '] = mse
+        losses['valloss/Validation MSE: '] = mse
+
+        return losses
+
 
 class GPT2Flat_masked(GPT2Flat_fullattention):
     def build_model(self, args):
@@ -493,6 +883,93 @@ class GPT2Flat_masked(GPT2Flat_fullattention):
         # emb = self.embeddings.quant_emb.emb[0].weight
         # assert self.head.head[0].weight[0, 0] == emb[0, 0]
         return super().forward(*args, **kwargs)
+
+    def loss(self, data, i=0, sid=None, train=True, criterion=None):
+        '''
+        Recursively calculate the loss of a trained model
+        for every channel in the current timestep.
+        '''
+        losses, logits, _ = self.loss_(data, i, sid, train, criterion)
+
+        logits = sample(self.args, logits.detach())
+
+        losses = self.compute_mse(logits, data['inputs'], losses)
+        return losses, None, None
+
+    def generate_(self, dataset):
+        self.out_times = 1
+        self.head.out_times = 1
+        self.use_cache = True
+        channels = self.args.num_channels
+        ex_shift = self.args.example_shift
+        inp_len = self.args.sample_rate
+        gen_shift = self.args.generate_shift
+        gen_len = self.args.generate_length
+
+        xtrain = dataset.x_train_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        data = xtrain[0, :channels, :-gen_shift].clone()
+        zeros = torch.zeros((channels, gen_len), dtype=torch.int16)
+        data = torch.cat((data, zeros.to(data.device)), dim=1)
+
+        # select half of label timeseries from each batch
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        cond = cond[:data.shape[1]]
+
+        # save cond to result_dir for later
+        np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                cond.cpu().numpy())
+        cond.unsqueeze_(0).unsqueeze_(0)
+        data.unsqueeze_(0)
+
+        print(data.shape)
+        print(cond.shape)
+
+        for chunk in range(0, data.shape[2]-inp_len, gen_shift):
+            end_ind = chunk+inp_len-gen_shift+1
+            inputs = data[:, :, chunk:end_ind]
+            cond_ex = cond[:, :, chunk:end_ind]
+
+            past_kv = None
+            for t in range(gen_shift):
+                logits, past_kv = self.forward({
+                    'inputs': inputs,
+                    'condition': cond_ex,
+                    'past_key_values': past_kv})
+
+                logits = logits.detach()
+                inputs = sample(self.args, logits)
+
+                self.set_tid(end_ind+t-chunk)
+
+                cond_ex = cond[:, :, end_ind+t:end_ind+t+1]
+                data[:, :, end_ind+t-1:end_ind+t] = inputs
+
+            self.set_tid(None)
+
+            # print progress in percent
+            if chunk % 100 == 0:
+                percent = chunk/data.shape[2]*100
+                print('Progress: {:.2f}%'.format(percent), flush=True)
+
+        data = data[0, :, :].cpu().numpy()
+        name = 'generated.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+        # decode to raw data
+        data = dataset.reconstruct(data)
+        name = 'generated_decoded.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+        # check reconstruction of real data
+        xtrain = xtrain[:, :channels, :xtrain.shape[2]//2]
+        xtrain = xtrain.permute(1, 0, 2).reshape(channels, -1)
+        recon = dataset.reconstruct(xtrain.cpu().numpy())
+
+        # save reconstruction to result_dir for later
+        name = 'reconstruction_xtrain.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': recon})
 
 
 class GPT2Model_masked(GPT2Model):

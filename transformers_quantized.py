@@ -3,8 +3,10 @@ from torch.nn.parameter import Parameter
 import torch
 import torch.nn.functional as F
 import numpy as np
+import os
+from scipy.io import savemat
 
-from wavenets_full import WavenetFullChannelMixMixin, WavenetFullTest
+from wavenets_full import WavenetFullChannelMixMixin, WavenetFullTest, sample
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Model
 
@@ -37,11 +39,86 @@ class TransformerQuantized(GPT2Model, WavenetFullChannelMixMixin):
         if not hasattr(self, 'use_cache'):
             self.use_cache = False
 
-    def generate(self, train_data):
+    def generate(self, dataset):
+        self.eval()
         self.out_times = 0
-        self.use_cache = False
+        self.use_cache = True
         self.args.rf = self.args.sample_rate
-        return super().generate(train_data)
+        self.num_channels = self.args.num_channels
+
+        channels = self.args.num_channels
+        ex_shift = self.args.example_shift
+        inp_len = self.args.sample_rate
+        gen_shift = self.args.generate_shift
+        gen_len = self.args.generate_length
+
+        xtrain = dataset.x_train_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        data = xtrain[0, :channels, :-gen_shift].clone()
+        zeros = torch.zeros((channels, gen_len), dtype=torch.int16)
+        data = torch.cat((data, zeros.to(data.device)), dim=1)
+
+        # select half of label timeseries from each batch
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        cond = cond[:data.shape[1]]
+
+        if self.args.generate_input == 'random_cond':
+            # create conditioning data with shift+gen_len length
+            seconds = gen_len//self.args.sr_data
+            sr = self.args.sr_data
+            cond = [np.zeros((inp_len-gen_shift))]
+            for _ in range(seconds*2):
+                # uniform distribution between 0.2 and 0.8
+                # num_zeros = np.random.randint(int(sr*0.2), int(sr*0.8))
+                num_zeros = int(sr*0.5)
+                cond.append(np.zeros((num_zeros)))
+
+                # choose a class randomly from self.args.num_classes
+                cl = np.random.randint(1, self.args.num_classes)
+
+                # epoch_len = np.random.randint(int(sr*0.2), int(sr*0.8))
+                epoch_len = int(sr*self.args.trial_len)
+                cond.append(np.array([cl]*epoch_len))
+
+            cond = np.concatenate(cond)[:data.shape[1]]
+            cond = torch.Tensor(cond).to(data.device).to(data.dtype)
+
+        # save cond to result_dir for later
+        np.save(os.path.join(self.args.result_dir, 'generate_cond.npy'),
+                cond.cpu().numpy())
+        cond.unsqueeze_(0).unsqueeze_(0)
+        data.unsqueeze_(0)
+
+        print(data.shape)
+        print(cond.shape)
+
+        for chunk in range(0, data.shape[2]-inp_len, gen_shift):
+            end_ind = chunk+inp_len-gen_shift
+            inputs = data[:, :, chunk:end_ind]
+            cond_ex = cond[:, :, chunk:end_ind]
+
+            past_kv = None
+            for t in range(gen_shift):
+                logits, past_kv = self.forward({
+                    'inputs': inputs,
+                    'condition': cond_ex,
+                    'past_key_values': past_kv})
+
+                logits = logits.detach()
+                inputs = sample(self.args, logits)
+
+                cond_ex = cond[:, :, end_ind+t:end_ind+t+1]
+                data[:, :, end_ind+t:end_ind+t+1] = inputs
+
+            # print progress in percent
+            if chunk % 100 == 0:
+                percent = chunk/data.shape[2]*100
+                print('Progress: {:.2f}%'.format(percent), flush=True)
+
+        data = data[0, :, :].cpu().numpy()
+        name = 'generated.mat'
+        savemat(os.path.join(self.args.result_dir, name), {'X': data})
 
     def build_model(self, args):
         self.quant_levels = args.mu + 1
@@ -70,6 +147,11 @@ class TransformerQuantized(GPT2Model, WavenetFullChannelMixMixin):
         self.ch_ids = torch.arange(args.num_channels).cuda()
 
         self.new_names = ['head', 'cond_emb', 'quant_emb', 'ch_emb']
+
+    def save_chn_embeddings(self):
+        # save channel embeddings
+        ch_emb = self.ch_emb.weight.data.cpu().numpy()
+        np.save(os.path.join(self.args.result_dir, 'ch_emb.npy'), ch_emb)
 
     def embedding_method(self, x, cond, ch_emb):
         return x + cond + ch_emb
@@ -209,8 +291,16 @@ class TransformerQuantizedConvMix(TransformerQuantized):
         x = self.embedding_method(x, cond, ch_emb)
         x = x.reshape(-1, timesteps, x.shape[-1])  # B*C x T x E
 
-        outputs = self.gpt2_forward(x)
-        outputs = self.forward_head(outputs[0])
+        # check if data dict has past_key_values
+        if 'past_key_values' not in data:
+            data['past_key_values'] = None
+
+        outputs = self.gpt2_forward(x, past_key_values=data['past_key_values'])
+        past_key_values = outputs.past_key_values
+        outputs = self.forward_head(outputs[0], data)
+
+        if past_key_values is not None:
+            outputs = (outputs, past_key_values)
 
         return outputs
 
