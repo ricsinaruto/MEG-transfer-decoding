@@ -1841,6 +1841,9 @@ def main(Args, gpu_id=None):
         args_pass.closest_chs = checklist(args.closest_chs, i)
         args_pass.batch_size = checklist(args.batch_size, i)
 
+        if not hasattr(args_pass, 'example_shift'):
+            args_pass.example_shift = args_pass.rf
+
         if hasattr(args, 'flip_axes'):
             args_pass.flip_axes = checklist(args.flip_axes, i)
 
