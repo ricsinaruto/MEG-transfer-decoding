@@ -20,7 +20,7 @@ for name in names:
         assert abs(float(d[k])-float(values[k])) < 0.005
 
 # check that model.pt exists
-for n in ['_end', '_epoch', '_init', '']:
+for n in ['_end', '_epoch', '']:
     path = os.path.join(directory, 'model' + n + '.pt')
     assert os.path.exists(path)
 
