@@ -583,9 +583,10 @@ class CichyDataCrossval(CichyDataRobust):
         split = args.split[1] - args.split[0]
         split = int(split*dataset.shape[1])
 
-        for i in range(dataset.shape[0]):
-            perm = np.random.permutation(dataset.shape[1])
-            dataset[i, :, :, :] = dataset[i, perm, :, :]
+        if args.shuffle:
+            for i in range(dataset.shape[0]):
+                perm = np.random.permutation(dataset.shape[1])
+                dataset[i, :, :, :] = dataset[i, perm, :, :]
 
         # create separate val and test splits
         x_val = dataset[:, :split, :, :]
@@ -1454,6 +1455,52 @@ class CichyQuantizedRandomCond(CichyQuantized):
         # replace cond field of batch with self.cond_labels
         for i in len(batch):
             batch[i]['condition'] = self.cond_labels[inds]
+
+        return batch, sid
+    
+
+class CichyQuantizedRandomLabel(CichyQuantized):
+    def random_label(self, x):
+        cond = x[:, -2, :]
+
+        for i in range(cond.shape[0]):
+            # get the unique labels in this epoch, except 0
+            labels = np.unique(cond[i].cpu().numpy())
+            labels = labels[labels != 0]
+
+            # iterate over unique labels
+            for l in labels:
+                # replace all instances of this label with a new label
+                new_label = torch.randint(1, self.args.num_classes, (1,))
+                cond[i, cond[i] == l] = new_label
+
+        return cond
+
+    def set_common(self, args=None):
+        super().set_common(args)
+
+        # randomize the condition labels of self.x_train_t
+        self.x_train_t[:, -2, :] = self.random_label(self.x_train_t)
+        self.x_val_t[:, -2, :] = self.random_label(self.x_val_t)
+        self.x_test_t[:, -2, :] = self.random_label(self.x_test_t)
+
+    def _get_batch_testing(self, i, data, split):
+        '''
+        Get batch of data.
+        '''
+        batch, sid, inds = super()._get_batch(i, data, split)
+
+        # replace cond field of batch with self.cond_labels
+        for i, b in enumerate(batch):
+            # get the unique labels in this batch, except 0
+            labels = np.unique(b['condition'].cpu().numpy())
+            labels = labels[labels != 0]
+
+            # iterate over unique labels
+            for l in labels:
+                # replace all instances of this label with a new label
+                new_label = np.random.randint(1, self.args.num_classes)
+                batch[i]['condition'][b['condition'] == l] = new_label
 
         return batch, sid
 

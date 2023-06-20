@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-base = os.path.join('..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'data_quant')
+base = os.path.join('..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'gpt2_temp1.5_100hz')
 
 if '_100hz' not in base:
     path = os.path.join(base, 'event_times.npy')

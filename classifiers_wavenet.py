@@ -537,6 +537,10 @@ class WavenetClassifierSemb(WavenetClassifier):
             if 'ensemble' in self.args.result_dir:
                 return self.ensemble_forward(x, sid)
 
+        # sid-s bigger than self.args.subjects should be set to 0
+        if sid is not None:
+            sid[sid > self.wavenet.subject_emb.weight.shape[0] - 1] = 0
+
         return super(WavenetClassifierSemb, self).forward(x, sid)
 
 

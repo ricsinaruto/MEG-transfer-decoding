@@ -29,8 +29,8 @@ event_dict = {#'event_off':1,
 
 # NEED TO INTERPOLATE BAD CHANNELS
 
-dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc25hz/oslpy/task_part1_rc_raw_tsss_mc'
-outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc25hz/inner_speech_sub'
+dataset_path = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc1_100hz/oslpy/task_part1_rc_raw_tsss_mc'
+outdir = '/gpfs2/well/woolrich/projects/disp_csaky/RC/task_maxfilter/preproc1_100hz/inner_speech_sub'
 #files = [f for f in os.listdir(dataset_path) if 'raw.fif' in f]
 files = ['task_part1_rc_tsss_mc_preproc_raw.fif']
 for f in files:
@@ -108,7 +108,7 @@ for f in files:
     epochs = mne.Epochs(raw,
                         new_events,
                         event_id=event_dict,
-                        tmin=-1.0,
+                        tmin=0.0,
                         tmax=1.0,
                         baseline=None,
                         picks=['meg'],
@@ -126,6 +126,6 @@ for f in files:
 
         event_id = event[-1]
         os.makedirs(f"{outdir}/cond{event_id-2}", exist_ok=True)
-        n_trials = int(len(os.listdir(f"{outdir}/cond{event_id-2}"))/2)
+        n_trials = int(len(os.listdir(f"{outdir}/cond{event_id-2}")))
         np.save(f"{outdir}/cond{event_id-2}/trial{n_trials}.npy", data)
-        savemat(f"{outdir}/cond{event_id-2}/trial{n_trials}.mat", {'X': data})
+        #savemat(f"{outdir}/cond{event_id-2}/trial{n_trials}.mat", {'X': data})
