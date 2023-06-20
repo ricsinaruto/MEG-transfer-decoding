@@ -545,6 +545,8 @@ class WavenetFull(WavenetSimple):
             losses, pred, target = self.compute_mse(preds, targets, losses)
 
         if self.save_preds and False:
+            ce_loss = None
+            shape = None
             self.save_outputs(pred, target, ce_loss, shape, train=train, i=i)
 
         return losses, logits, past_kv
