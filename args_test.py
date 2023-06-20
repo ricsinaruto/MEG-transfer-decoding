@@ -57,6 +57,7 @@ class Args:
         self.timesteps = 1  # how many timesteps in the future to forecast
         self.sample_rate = [0, 256]  # start and end of timesteps within trials
         self.rf = 128  # receptive field of wavenet, 2*rf - 1
+        self.example_shift = 128
         rf = 128
         ks = self.kernel_size
         nl = int(np.log(rf) / np.log(ks))
