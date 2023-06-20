@@ -1838,9 +1838,11 @@ def main(Args, gpu_id=None):
         args_pass.generate_noise = checklist(args.generate_noise, i)
         args_pass.subjects = checklist(args.subjects, i)
         args_pass.original_sr = checklist(args.original_sr, i)
-        args_pass.flip_axes = checklist(args.flip_axes, i)
         args_pass.closest_chs = checklist(args.closest_chs, i)
         args_pass.batch_size = checklist(args.batch_size, i)
+
+        if hasattr(args, 'flip_axes'):
+            args_pass.flip_axes = checklist(args.flip_axes, i)
 
         if isinstance(args.num_channels[0], list):
             args_pass.num_channels = args.num_channels[i]
