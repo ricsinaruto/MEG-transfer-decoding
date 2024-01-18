@@ -1,5 +1,5 @@
 # MEG-transfer-decoding
-General PhD research code for modeling and decoding M/EEG data. Expect bugs and unexpected behaviour. This readme describes how to reproduce results in [Interpretable full-epoch multiclass decoding for M/EEG](https://biorxiv.org/cgi/content/short/2023.03.13.532375v1). We propose that a full-epoch multiclass model is better than sliding window and/or pairwise models for decoding visual stimuli, and we show how it can be used for multivariate pattern analysis (MVPA) through permutation feature importance (PFI).
+General PhD research code for modeling and decoding M/EEG data. Expect bugs and unexpected behaviour. This readme describes how to reproduce results in [Interpretable many-class decoding for MEG](https://www.sciencedirect.com/science/article/pii/S1053811923005475). We propose that a full-epoch multiclass model is better than sliding window and/or pairwise models for decoding visual stimuli, and we show how it can be used for multivariate pattern analysis (MVPA) through permutation feature importance (PFI).
 
 **Since this repository is constantly evolving and contains a lot of other projects, make sure you are using the code version ([v0.2-paper](https://github.com/ricsinaruto/MEG-transfer-decoding/tree/v0.2-paper)) specifically created for the publication.**
 ```
