@@ -1,4 +1,4 @@
-# MEG-transfer-decoding
+# MEG-transfer-decoding ([PhD Thesis](https://ricsinaruto.github.io/docs/thesis_final_appendix.pdf))
 General PhD research code for modeling and decoding M/EEG data. Expect bugs and unexpected behaviour.
 
 This repository contains code for [Foundational GPT Model for MEG](https://arxiv.org/abs/2404.09256), however the readme does not cover this currently.
