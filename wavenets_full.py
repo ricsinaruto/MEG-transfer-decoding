@@ -756,7 +756,7 @@ class WavenetFull(WavenetSimple):
             data['condition'] = data['condition'].unsqueeze(1)
 
             # First, compute p(X|Y=y)
-            logits = self.forward(data)
+            logits = self.forward(data).detach()
             logits = logits[:, :, :horizon, :]
 
             T = logits.shape[2]
@@ -766,7 +766,7 @@ class WavenetFull(WavenetSimple):
             log_px_y = log_px_y.view(B, C*T)
 
             log_pxy = log_px_y.sum(-1) + log_py
-            log_pxys.append(log_pxy.detach())
+            log_pxys.append(log_pxy)
             del logits
 
         return torch.stack(log_pxys, -1)
@@ -774,6 +774,7 @@ class WavenetFull(WavenetSimple):
     def classify(self, data):
         baseline = self.args.sr_data // 10 + 10
         targets = data['condition'][:, 0, self.args.rf+baseline].clone()
+        targets -= 1
 
         log_pxys = self.compute_log_pxy(data)
         log_px = torch.logsumexp(log_pxys, -1)

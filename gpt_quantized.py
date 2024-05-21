@@ -3,7 +3,7 @@ from torch.nn.parameter import Parameter
 import torch
 import os
 import numpy as np
-import gc
+import torch.nn.functional as F
 from scipy.io import savemat
 
 from wavenets_full import WavenetFullChannelMixMixin, sample, accuracy
@@ -150,18 +150,17 @@ class GPT2MEG(WavenetFullChannelMixMixin):
         self.args = args
         self.out_times = args.example_shift
 
-        # check if model has num_channels attribute
-        if not hasattr(self, 'num_channels'):
-            self.num_channels = args.num_channels
-            if hasattr(args, 'model_chn_dim'):
-                self.num_channels = args.model_chn_dim
+        self.num_channels = args.num_channels
+
+        if hasattr(args, 'model_chn_dim'):
+            self.num_channels = args.model_chn_dim
 
         if not hasattr(self, 'use_cache'):
             self.use_cache = False
 
     def generate(self, dataset):
         if hasattr(self.args, 'model_chn_dim'):
-            self.generate_mem(dataset)
+            return self.generate_mem(dataset)
         self.eval()
         self.out_times = 1
         self.head.out_times = 1
@@ -173,6 +172,7 @@ class GPT2MEG(WavenetFullChannelMixMixin):
         inp_len = self.args.sample_rate
         gen_shift = self.args.generate_shift
         gen_len = self.args.generate_length
+        sid = self.args.subject_id
 
         xtrain = dataset.x_train_t
         assert xtrain.shape[2] / ex_shift == 2
@@ -225,7 +225,7 @@ class GPT2MEG(WavenetFullChannelMixMixin):
                 logits, past_kv = self.forward({
                     'inputs': inputs,
                     'condition': cond_ex,
-                    'sid': torch.zeros_like(cond_ex),
+                    'sid': torch.ones_like(cond_ex) * sid,
                     'past_key_values': past_kv})
 
                 logits = logits.detach()
@@ -257,6 +257,7 @@ class GPT2MEG(WavenetFullChannelMixMixin):
         inp_len = self.args.sample_rate
         gen_shift = self.args.generate_shift
         gen_len = self.args.generate_length
+        sid = self.args.subject_id
 
         xtrain = dataset.x_train_t
         assert xtrain.shape[2] / ex_shift == 2
@@ -316,6 +317,7 @@ class GPT2MEG(WavenetFullChannelMixMixin):
                         logits, past_kv[chn_ind] = self.forward({
                             'inputs': inputs[:, low_chn:high_chn, :].clone(),
                             'condition': cond_ex.clone(),
+                            'sid': torch.ones_like(cond_ex) * sid,
                             'past_key_values': past_kv[chn_ind],
                             'ch_ids': np.arange(low_chn, high_chn)})
 
@@ -337,6 +339,154 @@ class GPT2MEG(WavenetFullChannelMixMixin):
         data = data[0, :, :].cpu().numpy()
         name = 'generated.mat'
         savemat(os.path.join(self.args.result_dir, name), {'X': data})
+
+    def compute_log_pxy(self, logits, targets):
+        '''
+        Computes p(X=x,Y=y) and returns a BxQ tensor.
+        To compute p(X,Y) from p(X|Y) we need to make an assumption about p(Y).
+        We assume a uniform distribution over 118 classes.
+        What about data without stimuli?
+        Args:
+            data: (B,Q,T) tensor of MEG data
+            tau: temperature scaling parameter.
+        Returns:
+            log_pxy: (B,Q) tensor, where Q is the number of quantization levels
+
+        log p(X=x) = log sum_y p(X=x|Y=y)p(Y=y)
+                   = log sum_y exp(log p(X=x|Y=y)p(Y=y))
+                   = log sum_y exp(log p(X=x|Y=y) + log p(Y=y))
+                   = log sum_y exp(log p(X0|Y=y)p(X1|X0,Y=y)...p(XT|XT-1...X0,Y=y) + log p(Y=y))
+                   = log sum_y exp(log p(X0|Y=y)+log p(X1|X0,Y=y)+...+log p(XT|XT-1...X0,Y=y) + log p(Y=y))
+        this can be conveniently computed using torch.logsumexp
+        '''
+        nc = self.args.num_classes
+        B, C, T, Q = logits.shape
+        log_py = torch.log(torch.tensor(1.0 / nc))
+        targets = targets.reshape(-1)
+
+        log_px_y = F.log_softmax(logits, -1)
+        log_px_y = log_px_y.reshape(-1, Q)
+        log_px_y = log_px_y[torch.arange(log_px_y.shape[0]), targets]
+        log_px_y = log_px_y.view(B, C*T)
+
+        log_pxy = log_px_y.sum(-1) + log_py
+
+        return log_pxy
+
+    def classify(self, dataset):
+        self.eval()
+        self.out_times = self.args.generate_shift
+        self.head.out_times = self.args.generate_shift
+        self.args.rf = self.args.sample_rate
+        self.num_channels = self.args.model_chn_dim
+
+        bs = self.args.batch_size
+        inp_len = self.args.sample_rate
+        channels = self.args.num_channels
+        model_chn = self.args.model_chn_dim
+        ex_shift = self.args.example_shift
+        gen_shift = self.args.generate_shift
+        sid = self.args.subject_id
+        ep_len = 90
+
+        xtrain = dataset.x_val_t
+        assert xtrain.shape[2] / ex_shift == 2
+
+        # select half of label timeseries from each batch
+        data = xtrain[:, :channels, :xtrain.shape[2]//2]
+        data = data.permute(1, 0, 2).reshape(channels, -1)
+        cond = xtrain[:, -2, :xtrain.shape[2]//2].reshape(-1)
+        sid_ts = xtrain[:, -1, :xtrain.shape[2]//2].reshape(-1)
+
+        # select only one subject
+        data = data[:, sid_ts == sid].to('cuda')
+        cond = cond[sid_ts == sid].to('cuda')
+
+        # find trial onset indices
+        inds = cond[1:] - cond[:-1]
+
+        # find indices of positive values in inds array
+        inds = torch.nonzero(inds > 0).squeeze(1)
+        cond = cond.unsqueeze(0).unsqueeze(0)
+        data = data.unsqueeze(0)
+
+        print(data.shape)
+        print(cond.shape)
+        accs = []
+
+        data = [data[:, :, ind-inp_len+gen_shift:ind+ep_len+1] for ind in inds]
+        data = torch.cat(data, dim=0)
+
+        cond = [cond[:, :, ind-inp_len+gen_shift:ind+ep_len] for ind in inds]
+        cond = torch.cat(cond, dim=0)
+
+        # select first half of data and cond
+        start = int(self.args.classify_range[0] * data.shape[0])
+        end = int(self.args.classify_range[1] * data.shape[0])
+        data = data[start:end, :, :]
+        cond = cond[start:end, :, :]
+
+        for co in range(0, data.shape[0], bs):
+            log_pxys = []
+            for c in range(1, 119):
+
+                outputs = []
+                for shift in range(0, ep_len, gen_shift):
+                    inputs = data[co:co+bs, :, shift:shift+inp_len].clone()
+                    cond_ex = cond[co:co+bs, :, shift:shift+inp_len].clone()
+                    cond_ex_ = cond[co:co+bs, :, shift:shift+inp_len].clone()
+
+                    # replace nonzero elements of condition with c
+                    cond_ex_[cond_ex_ > 0] = c
+                    cond_ex[:, :, -shift-gen_shift:] = cond_ex_[:, :, -shift-gen_shift:]
+
+                    ch_outputs = []
+                    num_loops = channels//model_chn
+                    for chn_ind in range(num_loops):
+                        low_chn = chn_ind*model_chn
+                        high_chn = (chn_ind+1)*model_chn
+
+                        torch.cuda.empty_cache()
+                        with torch.no_grad():
+                            logits = self.forward({
+                                'inputs': inputs[:, low_chn:high_chn, :].clone(),
+                                'condition': cond_ex.clone(),
+                                'sid': torch.ones_like(cond_ex) * sid,
+                                'ch_ids': np.arange(low_chn, high_chn)})
+
+                        logits = logits.detach()
+                        ch_outputs.append(logits)
+
+                    ch_outputs = torch.cat(ch_outputs, 1)
+                    outputs.append(ch_outputs)
+
+                outputs = torch.cat(outputs, 2)
+                targets = data[co:co+bs, :, -ep_len:].clone()
+                outputs = self.compute_log_pxy(outputs, targets)
+                log_pxys.append(outputs)
+
+                print(f'cond {c}', flush=True)
+
+            log_pxys = torch.stack(log_pxys, -1)
+
+            # computing accuracy
+            target = cond[co:co+bs, 0, inp_len] - 1
+            log_px = torch.logsumexp(log_pxys, -1)
+            log_py_x = log_pxys - log_px.unsqueeze(-1)
+
+            acc = log_py_x.argmax(1) == target
+            acc = acc.float().mean()
+            accs.append(acc)
+
+            # print a progress bar
+            print(acc, flush=True)
+
+        acc = torch.stack(accs).reshape(-1).mean()
+        print(acc)
+
+        # save accuracy value
+        with open(self.args.result_dir + '/classify_acc.txt', 'w') as f:
+            f.write(str(acc))
 
     def reshape_output(self, x):
         return x.reshape(-1, self.num_channels, x.shape[1], x.shape[2])
@@ -689,7 +839,7 @@ class GPT2Flat(GPT2MEG):
             past_kv = None
 
             # Release unused GPU memory and monitor memory usage
-            # torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
             # print("Memory allocated: ", torch.cuda.memory_allocated())
             # print("Memory cached: ", torch.cuda.memory_reserved())
 

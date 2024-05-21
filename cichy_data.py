@@ -243,6 +243,10 @@ class CichyData(MRCData):
             # dataset shape: conditions x trials x timesteps x channels
             dataset = np.array([t[:min_trials, :, :] for t in dataset])
 
+            if hasattr(args, 'flip_axes'):
+                if args.flip_axes:
+                    dataset = dataset.transpose(0, 1, 3, 2)
+
             if args.whiten > 1000:
                 args.num_channels = list(range(dataset.shape[-1]))
                 args.whiten = dataset.shape[-1]
@@ -250,9 +254,6 @@ class CichyData(MRCData):
 
             # choose first 306 channels
             dataset = dataset.transpose(0, 1, 3, 2)
-            if hasattr(args, 'flip_axes'):
-                if args.flip_axes:
-                    dataset = dataset.transpose(0, 1, 3, 2)
 
             dataset = dataset[:, :, args.num_channels, :]
             self.timesteps = dataset.shape[3]
@@ -1503,6 +1504,24 @@ class CichyQuantizedRandomLabel(CichyQuantized):
                 batch[i]['condition'][b['condition'] == l] = new_label
 
         return batch, sid
+
+
+class CichyQuantizedOneLabel(CichyQuantizedRandomLabel):
+    def random_label(self, x):
+        cond = x[:, -2, :]
+
+        for i in range(cond.shape[0]):
+            # get the unique labels in this epoch, except 0
+            labels = np.unique(cond[i].cpu().numpy())
+            labels = labels[labels != 0]
+
+            # iterate over unique labels
+            for l in labels:
+                # replace all instances of this label with a new label
+                new_label = 1
+                cond[i, cond[i] == l] = new_label
+
+        return cond
 
 
 class CichyQuantizedSimulation(CichyQuantized):

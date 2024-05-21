@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-base = os.path.join('..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'gpt2_temp1.5_100hz')
+base = os.path.join('..', 'results', 'cichy_epoched', 'subj1', 'hmm', 'gpt2_grouplonglong_100hz')
 
 if '_100hz' not in base:
     path = os.path.join(base, 'event_times.npy')
@@ -21,6 +21,8 @@ else:
 
 # load data
 data = np.load(os.path.join(base, 'subject01.npy'))
+print(data.shape)
+print(event_times.shape)
 
 # epoch data
 epochs = []

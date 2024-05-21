@@ -282,6 +282,7 @@ class Experiment:
         if getattr(self.args, 'recursive_loss', None):
             self.model.ds = self.dataset
 
+        losses = []
         # loop over test batches
         for i in range(num_batches):
             batch, sid = batch_func(i)
@@ -300,8 +301,22 @@ class Experiment:
                             subbatch, i, subsid, train=False)
                 else:
                     loss, _, _ = self.model.loss(
-                        subbatch, i, subsid, train=False)
+                        subbatch, i, subsid, train=False) #criterion=True)
                 self.loss.append(loss)
+
+                #losses.append((subsid.cpu().numpy(),
+                #               loss['valloss/valcriterion/Validation accuracy: ']))
+
+        '''
+        sid = np.array([loss[0] for loss in losses])
+        loss = np.array([loss[1].cpu().numpy() for loss in losses])
+
+        path = os.path.join(self.args.result_dir, 'test_loss_subs.txt')
+        with open(path, 'w') as f:
+            for i in range(self.args.subjects):
+                sub_loss = loss[sid == i].mean()
+                f.write(str(sub_loss) + '\n')
+        '''
 
         losses = self.loss.print('valloss', gpu_id=self.gpu_id)
 
@@ -360,22 +375,24 @@ class Experiment:
                                       'val')
         return losses
 
-    def classify(self):
+    def classify_(self):
         self.model.eval()
-
         accs = []
 
-        batches, _ = self.dataset.get_val_batch(0)
+        for i in range(self.dataset.val_batches):
+            batch, sid = self.dataset.get_val_batch(i)
+            if not isinstance(batch, list):
+                batch = [batch]
+                sid = [sid]
 
-        batch = {'inputs': [], 'targets': [], 'condition': [], 'sid': []}
-        # loop over validation batches
-        for i in range(0, batches['sid'].shape[0], self.args.batch_size):
-
-            for k in batch.keys():
-                batch[k] = batches[k][i:i+self.args.batch_size]
-
-            acc = self.model.classify(batch)
-            accs.append(acc.double())
+            for subbatch, subsid in zip(batch, sid):
+                if self.args.amp:
+                    with torch.autocast(device_type='cuda',
+                                        dtype=torch.float16):
+                        acc = self.model.classify(subbatch)
+                        accs.append(acc.double())
+                else:
+                    raise NotImplementedError
 
         accs = torch.cat(accs, dim=0)
         accs = accs.mean(dim=0)
@@ -1782,6 +1799,9 @@ class Experiment:
     def generate(self):
         self.model.generate(self.dataset)
 
+    def classify(self):
+        self.model.classify(self.dataset)
+
     def kernel_network_FIR(self):
         self.model.kernel_network_FIR()
 
@@ -1807,6 +1827,7 @@ def main(Args, gpu_id=None):
     '''
     args = Args()
     dataset = None
+    args_data = None
 
     def checklist(x, i):
         # check if an argument is list or not
@@ -1841,6 +1862,9 @@ def main(Args, gpu_id=None):
         args_pass.closest_chs = checklist(args.closest_chs, i)
         args_pass.batch_size = checklist(args.batch_size, i)
 
+        if hasattr(args, 'subject_id'):
+            args_pass.subject_id = checklist(args.subject_id, i)
+
         if not hasattr(args_pass, 'example_shift'):
             args_pass.example_shift = args_pass.rf
 
@@ -1867,8 +1891,8 @@ def main(Args, gpu_id=None):
         if isinstance(args.max_trials, list):
             num_loops = len(args.max_trials)
 
-        # if only using one dataset across loops, initialze it once
         args_data = None
+        # if only using one dataset across loops, initialze it once
         if args.common_dataset and dataset is None:
             dataset = args_pass.dataset(args_pass)
             args_data = deepcopy(args_pass)
@@ -1995,7 +2019,7 @@ def main(Args, gpu_id=None):
             if Args.func.get('classify'):
                 e.classify()
 
-            e.save_embeddings()
+            #e.save_embeddings()
 
             # delete model and dataset
             del e.model

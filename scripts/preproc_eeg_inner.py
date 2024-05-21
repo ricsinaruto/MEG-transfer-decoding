@@ -5,7 +5,7 @@ import osl
 import yaml
 from scipy.io import savemat
 
-
+event_id = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '10': 10, '11': 11, '12': 12, '13': 13, '14': 14, '15': 15}
 event_dict = {#'event_off':1,
               'words/hungry': 2,
               'words/tired': 3,
@@ -27,20 +27,21 @@ event_dict = {#'event_off':1,
               #'button/4':2048
              }
 
-for i in [2, 3, 4]:
+
+for i in [10]:
     sid = str(i)
 
-    fif_name = "preproc_preproc_raw.fif"
+    fif_name = "task_preproc_preproc_raw.fif"
     base = "/gpfs2/well/woolrich/projects/disp_csaky/eeg/"
-    dataset_path = base + f"session{sid}/preproc0.1_30hz/oslpy/" + fif_name
-    outdir = base + "preproc0.1_30hz/inner_speech_longbc/sub" + sid
+    dataset_path = base + f"session{sid}/preproc1_40hz_csd/oslpy/" + fif_name
+    outdir = base + "preproc1_40hz_csd/inner_speech/sub" + sid
 
-    dataset = osl.preprocessing.read_dataset(dataset_path)
+    raw = mne.io.read_raw_fif(dataset_path, preload=True)
 
-    events = dataset['events']
+    events = mne.events_from_annotations(raw, event_id=event_id)
 
-    event_c = np.array([e[2] for e in events])
-    event_t = np.array([e[0] for e in events])
+    event_c = np.array([e[2] for e in events[0]])
+    event_t = np.array([e[0] for e in events[0]])
 
     count1 = 0
     count2 = 0
@@ -98,20 +99,17 @@ for i in [2, 3, 4]:
 
     new_events = np.array(new_events)
 
-    print(dataset['raw'].ch_names)
-
-    raw = dataset['raw'].load_data()
 
     # filter HEO, VEO and EMG channels
-    raw = raw.filter(0.1, 30, picks=['HEO', 'VEO', 'EMG'])
+    #raw = raw.filter(0.1, 30, picks=['HEO', 'VEO', 'EMG'])
 
     epochs = mne.Epochs(raw,
                         new_events,
-                        event_id=dataset['event_id'],
-                        tmin=-1.0,
+                        event_id=event_dict,
+                        tmin=0,
                         tmax=1.0,
                         baseline=None,
-                        picks=['eeg'],
+                        picks=['csd'],
                         reject=None,
                         preload=True)
 
